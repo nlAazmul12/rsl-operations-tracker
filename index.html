@@ -881,6 +881,7 @@ let state = {
   dhakaDateStr: '',
   fridayWeekKey: '',
   dailySheetVault: {}, // { '2026-11-14': { dateKey, filename, savedAt, payloadJson, stats } }
+  sheetTimeline: [], // Chronological array of uploaded cumulative data points: [{ id, dateKey, timestampMs, dtStr, filename, isBaseline, records }]
   users: [],
   unmatched: [],
   lastSyncTime: 'Initial Baseline Loaded',
@@ -1065,6 +1066,32 @@ function buildBaselineState() {
   state.users = users;
   state.unmatched = unmatched;
   state.selectedUnmatched = [];
+  const baseRecords = {};
+  INITIAL_CSV.forEach(r => {
+    const k = normEmail(r.e);
+    if (k) {
+      baseRecords[k] = {
+        total: round2(r.t),
+        approved: round2(r.b),
+        rejected: round2(r.r),
+        rejectedNonQa: round2(r.rp || 0),
+        rejectedAutoQa: round2(r.ra || 0),
+        pending: round2(r.p)
+      };
+    }
+  });
+  state.sheetTimeline = [{
+    id: 'dp_initial_baseline',
+    dateKey: '2026-01-01',
+    timestampMs: 1767225600000,
+    dtStr: 'Initial Baseline (Before Nov 14)',
+    filename: 'Initial_CSV_Baseline_216_Rows.csv',
+    isBaseline: true,
+    matchedCount: users.length,
+    totalRows: INITIAL_CSV.length,
+    records: baseRecords
+  }];
+
   state.lastSyncTime = 'CSV Baseline (216 rows)';
   state.updatedAt = 0;
   recordAutoDailyJsonBackup(todayStr, 'Initial_CSV_Baseline_216_Rows.csv', 'today', users.length, INITIAL_CSV.length, todayStr + ' Baseline');
@@ -1118,6 +1145,7 @@ function buildSerializablePayload() {
     extraLogins: authCfg.extraLogins || [],
     uploadHistory: state.uploadHistory || [],
     dailySheetVault: state.dailySheetVault || {},
+    sheetTimeline: state.sheetTimeline || [],
     settings: state.settings,
     dhakaDateStr: state.dhakaDateStr,
     fridayWeekKey: state.fridayWeekKey,
@@ -1178,6 +1206,7 @@ function applyParsedPayload(parsed) {
   }
   state.uploadHistory = Array.isArray(parsed.uploadHistory) ? parsed.uploadHistory : [];
   state.dailySheetVault = (parsed.dailySheetVault && typeof parsed.dailySheetVault === 'object') ? parsed.dailySheetVault : {};
+  state.sheetTimeline = Array.isArray(parsed.sheetTimeline) ? parsed.sheetTimeline : [];
   state.settings = parsed.settings || state.settings;
   state.dhakaDateStr = parsed.dhakaDateStr || formatDhakaDate(getDhakaNow());
   state.fridayWeekKey = parsed.fridayWeekKey || getFridayWeekKey(getDhakaNow());
@@ -1191,6 +1220,7 @@ function applyParsedPayload(parsed) {
   state.selectedUnmatched = (state.selectedUnmatched || []).filter(em =>
     state.unmatched.some(x => normEmail(x.email) === normEmail(em))
   );
+  if (Array.isArray(state.sheetTimeline) && state.sheetTimeline.length > 0) { recomputeAllFromTimeline(); }
   state.lastSyncTime = parsed.lastSyncTime || 'Cloud Synced';
   state.updatedAt = parsed.updatedAt || Date.now();
   window.__safeStore.set('rsl_tracker_data_v5', JSON.stringify(buildSerializablePayload()));
@@ -1455,11 +1485,156 @@ function checkAutoRollovers(forceMidnight) {
     changed = true;
   }
 
+  if (Array.isArray(state.sheetTimeline) && state.sheetTimeline.length > 0 && !forceMidnight) {
+    recomputeAllFromTimeline();
+  }
   if (changed) saveState(false);
 }
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+// =========================================================================
+// TIME-SERIES DATA-POINT ENGINE (DATE 1 -> DATE 2 -> DATE 3 DELTA CALCULATOR)
+// =========================================================================
+// Every uploaded sheet stays permanently in state.sheetTimeline sorted by timestamp.
+// For any email E across sorted points P_0, P_1, P_2...:
+//   Delta(P_k) = max(0, P_k.total - P_{k-1}.total) attributed to P_k.dateKey!
+//   - Today's Hours     = sum of deltas where P_k.dateKey === current Dhaka today
+//   - Yesterday's Hours = sum of deltas where P_k.dateKey === current Dhaka yesterday
+//   - Weekly Hours      = sum of deltas in current Friday->Friday week
+//   - All-Time Total    = latest cumulative snapshot total (never loses prior work)
+//   - Never removes, unassigns, or overwrites any user or Team Leader!
+
+function parseSlotToTimestampMs(dtInputVal) {
+  // dtInputVal is 'YYYY-MM-DDTHH:MM' or 'YYYY-MM-DD HH:MM BST'
+  const clean = String(dtInputVal || '').replace(' BST', '').replace(' ', 'T').trim();
+  const m = clean.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (m) {
+    const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]), hh = Number(m[4]), mm = Number(m[5]);
+    // Convert Dhaka UTC+6 local time to UTC epoch ms
+    return {
+      dateKey: `${m[1]}-${m[2]}-${m[3]}`,
+      timestampMs: Date.UTC(y, mo, d, hh - 6, mm, 0),
+      dtStr: `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} BST`
+    };
+  }
+  const nowD = getDhakaNow();
+  const dk = formatDhakaDate(nowD);
+  return {
+    dateKey: dk,
+    timestampMs: Date.now(),
+    dtStr: formatDhakaDateTimeInput(nowD).replace('T', ' ') + ' BST'
+  };
+}
+
+function getDateFridayWeekKeyFromStr(dateKeyStr) {
+  const m = String(dateKeyStr || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return getFridayWeekKey(getDhakaNow());
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  return getFridayWeekKey(d);
+}
+
+function recomputeAllFromTimeline() {
+  const tl = Array.isArray(state.sheetTimeline) ? state.sheetTimeline : [];
+  if (tl.length === 0) return;
+
+  // Sort strictly chronologically so Date 1 -> Date 2 -> Date 3 always subtract in exact time order
+  tl.sort((a, b) => (Number(a.timestampMs) || 0) - (Number(b.timestampMs) || 0));
+
+  const dNow = getDhakaNow();
+  const todayKey = formatDhakaDate(dNow);
+  const dYest = new Date(dNow.getTime());
+  dYest.setDate(dYest.getDate() - 1);
+  const yesterdayKey = formatDhakaDate(dYest);
+  const currentFriWeek = getFridayWeekKey(dNow);
+
+  // Track running cumulative total per email across data points
+  const prevTotalByEmail = {};
+  const emailComputed = {}; // cleanEm -> { latestRec, todayDelta, yesterdayDelta, weeklyDelta, byDate }
+
+  tl.forEach(dp => {
+    const recs = dp.records || {};
+    const dk = dp.dateKey || '';
+    const isBase = !!dp.isBaseline;
+    const dpWeek = getDateFridayWeekKeyFromStr(dk);
+
+    Object.keys(recs).forEach(cleanEm => {
+      const r = recs[cleanEm];
+      if (!r) return;
+      const curTot = round2(r.total || 0);
+      const prevTot = prevTotalByEmail.hasOwnProperty(cleanEm) ? prevTotalByEmail[cleanEm] : 0;
+      const delta = isBase ? 0 : Math.max(0, round2(curTot - prevTot));
+
+      prevTotalByEmail[cleanEm] = curTot;
+
+      if (!emailComputed[cleanEm]) {
+        emailComputed[cleanEm] = {
+          latestRec: r,
+          todayDelta: 0,
+          yesterdayDelta: 0,
+          weeklyDelta: 0,
+          byDate: {}
+        };
+      } else {
+        emailComputed[cleanEm].latestRec = r;
+      }
+
+      if (!isBase && dk) {
+        emailComputed[cleanEm].byDate[dk] = round2((emailComputed[cleanEm].byDate[dk] || 0) + delta);
+        if (dk === todayKey) {
+          emailComputed[cleanEm].todayDelta = round2(emailComputed[cleanEm].todayDelta + delta);
+        }
+        if (dk === yesterdayKey) {
+          emailComputed[cleanEm].yesterdayDelta = round2(emailComputed[cleanEm].yesterdayDelta + delta);
+        }
+        if (dpWeek === currentFriWeek) {
+          emailComputed[cleanEm].weeklyDelta = round2(emailComputed[cleanEm].weeklyDelta + delta);
+        }
+      }
+    });
+  });
+
+  // Apply computed time-series values back onto every user's email object WITHOUT removing or unassigning anyone
+  state.users.forEach(u => {
+    (u.emails || []).forEach(em => {
+      const k = normEmail(em.email);
+      const comp = emailComputed[k];
+      if (!comp) return;
+      const lr = comp.latestRec;
+      em.totalHours = round2(lr.total);
+      em.approvedHours = round2(lr.approved);
+      em.rejectedHours = round2(lr.rejected);
+      if (typeof lr.rejectedNonQa === 'number') em.rejectedNonQa = round2(lr.rejectedNonQa);
+      if (typeof lr.rejectedAutoQa === 'number') em.rejectedAutoQa = round2(lr.rejectedAutoQa);
+      em.pendingHours = round2(lr.pending);
+      em.yesterdayHours = round2(comp.yesterdayDelta);
+      em.midnightBaselineTotal = Math.max(0, round2(em.totalHours - comp.todayDelta));
+      em.fridayBaselineTotal = Math.max(0, round2(em.totalHours - comp.weeklyDelta));
+      em.byDateHours = comp.byDate;
+    });
+  });
+
+  // Also update unmatched queue with latest snapshot values so unmatched stays current
+  const assignedSet = new Set();
+  state.users.forEach(u => (u.emails || []).forEach(e => assignedSet.add(normEmail(e.email))));
+  const latestDp = tl[tl.length - 1];
+  if (latestDp && latestDp.records) {
+    const existingUnMap = {};
+    (state.unmatched || []).forEach(x => { existingUnMap[normEmail(x.email)] = x; });
+    Object.keys(latestDp.records).forEach(k => {
+      if (assignedSet.has(k)) return;
+      const lr = latestDp.records[k];
+      if (existingUnMap[k]) {
+        existingUnMap[k].totalHours = round2(lr.total);
+        existingUnMap[k].approvedHours = round2(lr.approved);
+        existingUnMap[k].rejectedHours = round2(lr.rejected);
+        existingUnMap[k].pendingHours = round2(lr.pending);
+      }
+    });
+    state.unmatched = Object.values(existingUnMap).filter(x => !assignedSet.has(normEmail(x.email)));
+  }
 }
 
 function getEmailMetrics(em) {
@@ -2062,21 +2237,26 @@ function renderTargetSlotWidget(prefixId, labelTitle) {
   const dNow = getDhakaNow();
   const nowVal = formatDhakaDateTimeInput(dNow);
   const yestVal = getYesterday1158InputStr();
+  const dTwoDays = new Date(dNow.getTime());
+  dTwoDays.setDate(dTwoDays.getDate() - 2);
+  const twoDaysVal = `${formatDhakaDate(dTwoDays)}T22:58`;
   return `
     <div class="target-slot-box" style="background:#fff;border-color:#93c5fd;box-shadow:0 1px 2px rgba(37,99,235,0.08);">
       <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;width:100%;">
-        <span style="font-size:12.5px;font-weight:700;color:#1e40af;">⏱ ${labelTitle || 'Target Time Bucket'}:</span>
-        <select id="${prefixId}_bucket" style="flex:1;min-width:240px;padding:7px 10px;border:1px solid #3b82f6;border-radius:7px;font-size:12.5px;font-weight:600;background:#eff6ff;color:#1e3a8a;" onchange="onTargetBucketChange('${prefixId}')">
-          <option value="today">Today (Live Live Today's Hours — Default)</option>
-          <option value="yesterday">Yesterday / 11:58 PM (Closes Yesterday • Resets Today to 0.00h)</option>
-          <option value="rolling_24h">Last 24 Hours Rolling Window (Calculates exact delta for last 24h)</option>
-          <option value="total_only">All-Time Total Only (Do NOT add to Today or Yesterday)</option>
+        <span style="font-size:12.5px;font-weight:700;color:#1e40af;">📅 ${labelTitle || 'Sheet Date & Time Data Point'}:</span>
+        <input type="datetime-local" id="${prefixId}_dt" value="${nowVal}" style="padding:7px 11px;border:1.5px solid #2563eb;border-radius:7px;font-size:13px;font-weight:700;background:#eff6ff;color:#1e3a8a;" />
+        <select id="${prefixId}_bucket" style="flex:1;min-width:220px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:12.5px;font-weight:600;background:#f8fafc;color:#334155;" onchange="onTargetBucketChange('${prefixId}')">
+          <option value="timeline_auto">Auto Time-Series Delta (Date 2 − Date 1 = Date 2 Hours)</option>
+          <option value="baseline">Baseline Snapshot (Starting Point before Date 1 — 0h daily delta)</option>
         </select>
-        <input type="datetime-local" id="${prefixId}_dt" value="${nowVal}" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;background:#fff;" />
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;width:100%;justify-content:flex-end;">
-        <button type="button" class="btn btn-outline btn-sm" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;" onclick="setQuickTargetSlot('${prefixId}', 'yesterday', '${yestVal}')">Set Yesterday 11:58 PM</button>
-        <button type="button" class="btn btn-outline btn-sm" onclick="setQuickTargetSlot('${prefixId}', 'today', '${nowVal}')">Set Today Now</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;width:100%;justify-content:space-between;align-items:center;">
+        <span style="font-size:11.5px;color:#475569;">Pick the exact date & time of the sheet (e.g. Nov 14 10:58 PM, Nov 15 11:58 PM, Nov 16 3:44 PM). All points stay in your timeline and auto-subtract!</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline btn-sm" onclick="setQuickTargetSlot('${prefixId}', 'timeline_auto', '${twoDaysVal}')">2 Days Ago 10:58 PM</button>
+          <button type="button" class="btn btn-outline btn-sm" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;" onclick="setQuickTargetSlot('${prefixId}', 'timeline_auto', '${yestVal}')">Yesterday 11:58 PM</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="setQuickTargetSlot('${prefixId}', 'timeline_auto', '${nowVal}')">Today Now</button>
+        </div>
       </div>
     </div>
   `;
@@ -2137,7 +2317,33 @@ function renderSyncView() {
        </div>`
     : '';
 
-  const timelineHtml = historyLogsHtml + (cloudSnapshotsList.length > 0
+  const sortedTimelinePoints = [...(state.sheetTimeline || [])].sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+  const dataPointsHtml = sortedTimelinePoints.length > 0
+    ? `<div style="margin-bottom:14px;padding:12px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:10px;">
+         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+           <div style="font-size:13px;font-weight:800;color:#166534;">📈 Active Chronological Data-Point Timeline (${sortedTimelinePoints.length} Sheets Linked — Auto-Calculating Date Deltas):</div>
+           <span style="font-size:11.5px;color:#15803d;font-weight:600;">Formula: Point[N] − Point[N−1] = Hours Earned on Point[N]'s Date</span>
+         </div>
+         <div style="display:grid;gap:6px;">
+           ${sortedTimelinePoints.map((dp, i) => {
+             const sumSheetHrs = Object.values(dp.records || {}).reduce((s, r) => s + (Number(r.total) || 0), 0);
+             return `
+               <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;padding:8px 12px;background:#fff;border:1px solid #bbf7d0;border-radius:8px;font-size:12px;">
+                 <div>
+                   <span class="badge ${dp.isBaseline ? 'badge-slate' : 'badge-emerald'}">${dp.isBaseline ? 'Point #0 (Baseline)' : 'Point #' + i + ' • ' + escapeHtml(dp.dateKey)}</span>
+                   <strong style="margin-left:6px;color:#0f172a;">${escapeHtml(dp.filename)}</strong>
+                   <span style="color:#475569;margin-left:6px;">@ <strong>${escapeHtml(dp.dtStr)}</strong></span>
+                   <span style="color:#059669;margin-left:8px;font-weight:700;">(Sheet Cumulative Sum: ${sumSheetHrs.toFixed(2)}h)</span>
+                 </div>
+                 <button type="button" class="btn btn-outline btn-sm" style="color:#e11d48;border-color:#fecdd3;padding:2px 8px;" onclick="removeTimelineDataPoint('${escapeJsAttr(dp.id)}')">✕ Remove Point</button>
+               </div>
+             `;
+           }).join('')}
+         </div>
+       </div>`
+    : '';
+
+  const timelineHtml = dataPointsHtml + historyLogsHtml + (cloudSnapshotsList.length > 0
     ? cloudSnapshotsList.slice(0, 5).map((s, idx) => `
         <div class="timeline-item">
           <div>
@@ -3043,9 +3249,8 @@ function handleCsvFileUpload(ev) {
       return;
     }
 
-    if (slot.bucket === 'today') {
-      checkAutoRollovers(false);
-    }
+    const parsedSlot = parseSlotToTimestampMs(slot.dtStr);
+    const isBaselineUpload = (slot.bucket === 'baseline');
 
     const emailIndex = {};
     state.users.forEach(u => {
@@ -3062,22 +3267,23 @@ function handleCsvFileUpload(ev) {
     const newUnmatched = [];
     const byLeader = {};
     state.leaders.forEach(l => { byLeader[l] = 0; });
+    const dpRecords = {};
 
     rows.forEach(r => {
       const k = normEmail(r.email);
+      dpRecords[k] = {
+        total: r.totalHours,
+        approved: r.approvedHours,
+        rejected: r.rejectedHours,
+        rejectedNonQa: r.rejectedNonQa,
+        rejectedAutoQa: r.rejectedAutoQa,
+        pending: r.pendingHours
+      };
       const hits = emailIndex[k];
       if (hits && hits.length > 0) {
         matchedCount++;
         hits.forEach(h => {
           byLeader[h.user.leader] = (byLeader[h.user.leader] || 0) + 1;
-          applyBucketToEmailMetrics(h.emObj, {
-            hasTotal: true, total: r.totalHours,
-            hasApproved: true, approved: r.approvedHours,
-            hasRejected: true, rejected: r.rejectedHours,
-            hasNonQa: true, rejectedNonQa: r.rejectedNonQa,
-            hasAutoQa: true, rejectedAutoQa: r.rejectedAutoQa,
-            hasPending: true, pending: r.pendingHours
-          }, slot.bucket);
         });
       } else if (!seenUnmatched.has(k)) {
         seenUnmatched.add(k);
@@ -3085,23 +3291,50 @@ function handleCsvFileUpload(ev) {
       }
     });
 
-    // Record upload in audit history with exact timestamp and bucket
+    // Save this upload as a permanent Time-Series Data Point (never overwrites other dates or removes users!)
+    state.sheetTimeline = Array.isArray(state.sheetTimeline) ? state.sheetTimeline : [];
+    // If an exact same timestamp & filename exists, replace that single point; otherwise append new point
+    const sameIdx = state.sheetTimeline.findIndex(p => p.timestampMs === parsedSlot.timestampMs && p.filename === file.name);
+    const newDp = {
+      id: 'dp_' + parsedSlot.timestampMs + '_' + Math.floor(Math.random() * 10000),
+      dateKey: parsedSlot.dateKey,
+      timestampMs: parsedSlot.timestampMs,
+      dtStr: parsedSlot.dtStr,
+      filename: file.name,
+      isBaseline: isBaselineUpload,
+      matchedCount: matchedCount,
+      totalRows: rows.length,
+      records: dpRecords
+    };
+    if (sameIdx >= 0) state.sheetTimeline[sameIdx] = newDp;
+    else state.sheetTimeline.push(newDp);
+
+    // Recompute all dates chronologically (Date 1 -> Date 2 -> Date 3 deltas) across Master, Leaderboards & Team Dashboards!
+    recomputeAllFromTimeline();
+
+    // Record upload in audit history with exact timestamp
     state.uploadHistory = state.uploadHistory || [];
     state.uploadHistory.unshift({
       filename: file.name,
-      bucket: slot.bucket,
-      dtStr: slot.dtStr,
-      timestampMs: Date.now(),
+      bucket: isBaselineUpload ? 'BASELINE' : parsedSlot.dateKey,
+      dtStr: parsedSlot.dtStr,
+      timestampMs: parsedSlot.timestampMs,
       matchedRows: matchedCount,
       totalRows: rows.length
     });
-    state.uploadHistory = state.uploadHistory.slice(0, 15);
+    state.uploadHistory = state.uploadHistory.slice(0, 25);
 
-    state.unmatched = newUnmatched;
+    // Merge any new unmatched emails without losing existing unmatched
+    const assignedSet = new Set();
+    state.users.forEach(u => (u.emails || []).forEach(e => assignedSet.add(normEmail(e.email))));
+    const mergedUn = {};
+    (state.unmatched || []).forEach(x => { if (!assignedSet.has(normEmail(x.email))) mergedUn[normEmail(x.email)] = x; });
+    newUnmatched.forEach(x => { if (!assignedSet.has(normEmail(x.email))) mergedUn[normEmail(x.email)] = x; });
+    state.unmatched = Object.values(mergedUn);
     state.selectedUnmatched = [];
-    state.lastSyncTime = `${file.name} [${slot.bucket.toUpperCase()} @ ${slot.dtStr}]`;
-    const targetDateKey = (slot.dtStr || '').slice(0, 10) || formatDhakaDate(getDhakaNow());
-    recordAutoDailyJsonBackup(targetDateKey, file.name, slot.bucket, matchedCount, rows.length, slot.dtStr);
+
+    state.lastSyncTime = `${file.name} [${parsedSlot.dtStr}]`;
+    recordAutoDailyJsonBackup(parsedSlot.dateKey, file.name, isBaselineUpload ? 'baseline' : parsedSlot.dateKey, matchedCount, rows.length, parsedSlot.dtStr);
     saveState(false);
     renderTabs();
     renderMain();
@@ -3495,6 +3728,16 @@ function importBackupJson(ev) {
   reader.readAsText(file);
 }
 
+
+function removeTimelineDataPoint(dpId) {
+  if (!confirm('Remove this data point from the timeline? All remaining dates will automatically recalculate their deltas without removing any team members.')) return;
+  state.sheetTimeline = (state.sheetTimeline || []).filter(p => p.id !== dpId);
+  recomputeAllFromTimeline();
+  saveState(false);
+  renderTabs();
+  renderMain();
+  showToast('Data point removed & all remaining date deltas recalculated!');
+}
 
 function applyDailyVaultArchive(dateKey) {
   const entry = (state.dailySheetVault || {})[dateKey];
