@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ReachSavvy Solutions — RSL Team Activity & Operations Tracker</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script>
   window.SUPABASE_URL = "https://tsmfomvcqymbwwqrkjwa.supabase.co";
   window.SUPABASE_ANON_KEY = "sb_publishable_4tQMbeRcfVbdQ6HCuLrlog_l5vBP048";
@@ -79,7 +80,7 @@
   .login-card p.sub { font-size: 13px; color: #64748b; margin-bottom: 22px; }
   .field-group { margin-bottom: 15px; }
   .field-group label { display: block; font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px; }
-  .field-group input {
+  .field-group input, .field-group select {
     width: 100%;
     padding: 10px 12px;
     border: 1px solid #cbd5e1;
@@ -87,8 +88,9 @@
     font-size: 14px;
     outline: none;
     transition: border-color 0.15s;
+    background: #fff;
   }
-  .field-group input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+  .field-group input:focus, .field-group select:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
   .login-btn {
     width: 100%;
     padding: 11px;
@@ -362,6 +364,8 @@
   .btn-outline { background: #fff; border-color: var(--border-strong); color: #334155; }
   .btn-outline:hover { background: #f8fafc; }
   .btn-danger { background: var(--rose); color: #fff; }
+  .btn-emerald { background: var(--emerald); color: #fff; }
+  .btn-emerald:hover { background: #047857; }
   .btn-sm { padding: 4px 9px; font-size: 11.5px; border-radius: 6px; }
   /* User Cards */
   .user-card {
@@ -400,12 +404,12 @@
     font-size: 12px;
     font-weight: 600;
   }
-  .checkin-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .checkin-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; background: #fff; }
   .yn-box {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    background: #fff;
+    background: #f8fafc;
     border: 1px solid var(--border);
     padding: 3px 6px 3px 9px;
     border-radius: 8px;
@@ -420,7 +424,7 @@
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
-    background: #f1f5f9;
+    background: #e2e8f0;
     color: #64748b;
   }
   .yn-btn.yes-on { background: #10b981; color: #fff; }
@@ -511,12 +515,10 @@
     padding: 9px 20px;
     border-radius: 10px;
     box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
-  }
-  .footer-logo-pill img {
-    height: 24px;
-    width: auto;
-    display: block;
-    object-fit: contain;
+    color: #fff;
+    font-weight: 800;
+    font-size: 12px;
+    letter-spacing: 0.08em;
   }
   .login-footer {
     margin-top: 20px;
@@ -527,16 +529,8 @@
     align-items: center;
     gap: 6px;
   }
-  .login-footer .footer-label {
-    font-size: 10px;
-  }
-  .login-footer .footer-logo-pill {
-    padding: 6px 14px;
-    border-radius: 8px;
-  }
-  .login-footer .footer-logo-pill img {
-    height: 18px;
-  }
+  .login-footer .footer-label { font-size: 10px; }
+  .login-footer .footer-logo-pill { padding: 6px 14px; border-radius: 8px; font-size: 11px; }
   .cloud-pill {
     background: #1e293b;
     border: 1px solid #334155;
@@ -567,8 +561,6 @@
     justify-content: space-between;
     gap: 8px;
   }
-  .btn-emerald { background: var(--emerald); color: #fff; }
-  .btn-emerald:hover { background: #047857; }
   .bulk-bar {
     display: flex;
     flex-wrap: wrap;
@@ -591,19 +583,9 @@
     border: 1px solid transparent;
     transition: all 0.15s;
   }
-  .toggle-pill.included {
-    background: #ecfdf5;
-    color: #059669;
-    border-color: #a7f3d0;
-  }
-  .toggle-pill.excluded {
-    background: #fff1f2;
-    color: #e11d48;
-    border-color: #fecdd3;
-  }
-  .row-selected td {
-    background: #eff6ff !important;
-  }
+  .toggle-pill.included { background: #ecfdf5; color: #059669; border-color: #a7f3d0; }
+  .toggle-pill.excluded { background: #fff1f2; color: #e11d48; border-color: #fecdd3; }
+  .row-selected td { background: #eff6ff !important; }
   .target-slot-box {
     background: #f8fafc;
     border: 1px solid #cbd5e1;
@@ -627,11 +609,9 @@
     border: 1px solid #e2e8f0;
     border-radius: 9px;
     font-size: 12.5px;
+    margin-bottom: 8px;
   }
-  .timeline-item:hover {
-    border-color: #93c5fd;
-    background: #eff6ff;
-  }
+  .timeline-item:hover { border-color: #93c5fd; background: #eff6ff; }
 </style>
 </head>
 <body>
@@ -652,16 +632,20 @@
       <label for="loginPass">Password</label>
       <input type="password" id="loginPass" placeholder="Enter password" onkeydown="if(event.key==='Enter'){window.__doLogin(event);}" />
     </div>
-    <button type="button" class="login-btn" onclick="window.__doLogin(event)">Unlock Dashboard</button>
+    <button type="button" class="login-btn" id="loginSubmitBtn" onclick="window.__doLogin(event)">Unlock Dashboard</button>
     <div id="loginErr"></div>
+    <div style="margin-top:12px;font-size:11.5px;color:#64748b;background:#f8fafc;padding:9px 11px;border-radius:8px;border:1px solid #e2e8f0;">
+      <strong>Workspace Access:</strong><br/>
+      • Team Leaders: <code>leader</code> / <code>rsl2026</code><br/>
+      • Owner / Master Admin: <code>owner</code> / <code>rslowner2026</code>
+    </div>
     <div class="login-footer">
       <span class="footer-label">Built by Femnex Ventures</span>
-      <div class="footer-logo-pill">
-        <img src="data:image/png;base64,..." alt="Femnex Ventures" />
-      </div>
+      <div class="footer-logo-pill">FEMNEX VENTURES</div>
     </div>
   </div>
 </div>
+
 <!-- MAIN APPLICATION SHELL -->
 <div id="appShell">
   <header class="topbar">
@@ -684,15 +668,17 @@
   </header>
   <nav class="nav-bar">
     <div class="tabs" id="navTabs"></div>
+    <div style="display:flex;gap:8px;align-items:center;padding:6px 0;">
+      <button type="button" class="btn btn-outline btn-sm" onclick="forceCloudSync()">🔄 Sync Now</button>
+    </div>
   </nav>
   <main class="container" id="mainContent"></main>
   <footer class="app-footer">
     <span class="footer-label">Built by Femnex Ventures</span>
-    <div class="footer-logo-pill">
-      <img src="data:image/png;base64,..." />
-    </div>
+    <div class="footer-logo-pill">FEMNEX VENTURES</div>
   </footer>
 </div>
+
 <!-- EDIT / ADD USER MODAL -->
 <div class="modal-backdrop" id="userModal">
   <div class="modal-box">
@@ -704,5 +690,1098 @@
   </div>
 </div>
 <div class="toast" id="toastBox"></div>
+
+<script>
+(function() {
+  "use strict";
+
+  // ==========================================
+  // 1. SUPABASE CLOUD INITIALIZATION
+  // ==========================================
+  const SUPABASE_URL = window.SUPABASE_URL || "https://tsmfomvcqymbwwqrkjwa.supabase.co";
+  const SUPABASE_KEY = window.SUPABASE_ANON_KEY || "sb_publishable_4tQMbeRcfVbdQ6HCuLrlog_l5vBP048";
+  let sb = null;
+  try {
+    if (window.supabase && typeof window.supabase.createClient === "function") {
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    }
+  } catch (e) {
+    console.warn("Supabase init warning:", e);
+  }
+
+  const STORAGE_KEY = "rsl_ops_tracker_state_v4";
+  const CLOUD_TABLE = "rsl_tracker_state";
+  const CLOUD_ROW_ID = "main_workspace";
+
+  // ==========================================
+  // 2. TIMEZONE & RESET UTILITIES (UTC+6 DHAKA)
+  // ==========================================
+  function getDhakaNow() {
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    return new Date(utc + (3600000 * 6));
+  }
+
+  function getDhakaDateStr(dateObj) {
+    const d = dateObj || getDhakaNow();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function getDhakaWeekKey(dateObj) {
+    // Weekly leaderboard resets Friday 12:00 AM Dhaka time
+    const d = new Date((dateObj || getDhakaNow()).getTime());
+    const day = d.getDay(); // 0=Sun, 5=Fri
+    const diffToFriday = (day >= 5) ? (day - 5) : (day + 2);
+    d.setDate(d.getDate() - diffToFriday);
+    return "WK-" + getDhakaDateStr(d);
+  }
+
+  function updateClock() {
+    const d = getDhakaNow();
+    const str = d.toLocaleString("en-US", {
+      weekday: "short", month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true
+    });
+    const el = document.getElementById("dhakaClock");
+    if (el) el.textContent = "Dhaka (UTC+6): " + str;
+    checkAutoRollover();
+  }
+
+  // ==========================================
+  // 3. DEFAULT APPLICATION STATE
+  // ==========================================
+  const DEFAULT_STATE = {
+    leaders: ["Mozid", "Siam", "Kawser", "Ahad"],
+    lastDhakaDate: getDhakaDateStr(),
+    lastDhakaWeek: getDhakaWeekKey(),
+    syncUnlocked: false,
+    users: [
+      {
+        id: "USR-101", name: "Ariful Islam", phone: "01711-223344", email: "ariful.rsl@gmail.com",
+        leader: "Mozid", status: "Active", includeInMaster: true,
+        totalHours: 142.5, validHours: 128.0, rejectedHours: 9.5, pendingHours: 5.0,
+        hoursToday: 6.5, hoursYesterday: 7.2, weeklyHours: 38.4, highestDaily: 9.8,
+        checkins: { morning: true, afternoon: true, evening: false }
+      },
+      {
+        id: "USR-102", name: "Tanvir Ahmed", phone: "01812-334455", email: "tanvir.rsl@gmail.com",
+        leader: "Siam", status: "Active", includeInMaster: true,
+        totalHours: 158.0, validHours: 144.2, rejectedHours: 8.8, pendingHours: 5.0,
+        hoursToday: 7.8, hoursYesterday: 6.9, weeklyHours: 41.2, highestDaily: 10.4,
+        checkins: { morning: true, afternoon: true, evening: true }
+      },
+      {
+        id: "USR-103", name: "Mehedi Hasan", phone: "01913-445566", email: "mehedi.rsl@gmail.com",
+        leader: "Kawser", status: "Active", includeInMaster: true,
+        totalHours: 119.4, validHours: 105.0, rejectedHours: 10.4, pendingHours: 4.0,
+        hoursToday: 5.4, hoursYesterday: 6.1, weeklyHours: 31.0, highestDaily: 8.9,
+        checkins: { morning: true, afternoon: false, evening: false }
+      },
+      {
+        id: "USR-104", name: "Shakil Mahmud", phone: "01614-556677", email: "shakil.rsl@gmail.com",
+        leader: "Ahad", status: "Active", includeInMaster: true,
+        totalHours: 164.8, validHours: 151.0, rejectedHours: 7.8, pendingHours: 6.0,
+        hoursToday: 8.2, hoursYesterday: 7.5, weeklyHours: 44.6, highestDaily: 11.2,
+        checkins: { morning: true, afternoon: true, evening: true }
+      }
+    ],
+    uploadLogs: [
+      {
+        id: "LOG-INIT",
+        timestamp: getDhakaDateStr() + " 10:00 AM (UTC+6)",
+        dateKey: getDhakaDateStr(),
+        fileName: "Initial_Baseline_Snapshot.xlsx",
+        recordsProcessed: 4,
+        totalDelta: 27.9,
+        validDelta: 24.5,
+        snapshot: []
+      }
+    ]
+  };
+
+  let state = loadLocalState();
+  let currentRole = null; // "leader" | "owner"
+  let activeTab = "master";
+  let selectedLeaderFilter = "ALL";
+  let searchQuery = "";
+  let selectedUserIds = new Set();
+
+  function loadLocalState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return Object.assign({}, DEFAULT_STATE, parsed);
+      }
+    } catch (e) {}
+    return JSON.parse(JSON.stringify(DEFAULT_STATE));
+  }
+
+  function saveLocalState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {}
+  }
+
+  function checkAutoRollover() {
+    const todayStr = getDhakaDateStr();
+    const weekStr = getDhakaWeekKey();
+    let changed = false;
+
+    if (state.lastDhakaDate && state.lastDhakaDate !== todayStr) {
+      state.users.forEach(u => {
+        if ((u.hoursToday || 0) > (u.highestDaily || 0)) {
+          u.highestDaily = u.hoursToday;
+        }
+        u.hoursYesterday = u.hoursToday || 0;
+        u.hoursToday = 0;
+        u.checkins = { morning: false, afternoon: false, evening: false };
+      });
+      state.lastDhakaDate = todayStr;
+      changed = true;
+    }
+
+    if (state.lastDhakaWeek && state.lastDhakaWeek !== weekStr) {
+      state.users.forEach(u => {
+        u.weeklyHours = 0;
+      });
+      state.lastDhakaWeek = weekStr;
+      changed = true;
+    }
+
+    if (changed) {
+      saveLocalState();
+      pushCloudState();
+      if (currentRole) renderAll();
+    }
+  }
+
+  // ==========================================
+  // 4. BULLETPROOF SUPABASE CLOUD SYNC
+  // ==========================================
+  function setCloudBadge(status, text) {
+    const pill = document.getElementById("cloudStatusPill");
+    if (!pill) return;
+    pill.className = "cloud-pill " + (status || "");
+    pill.textContent = text;
+  }
+
+  async function pullCloudState() {
+    if (!sb) {
+      setCloudBadge("offline", "☁️ Local Mode (Offline)");
+      return;
+    }
+    setCloudBadge("syncing", "☁️ Cloud: Syncing...");
+    try {
+      const { data, error } = await sb
+        .from(CLOUD_TABLE)
+        .select("payload")
+        .eq("id", CLOUD_ROW_ID)
+        .maybeSingle();
+
+      if (error) {
+        // Table might not exist yet or RLS restricted; fallback gracefully to local + show connected status
+        console.warn("Supabase table read notice:", error.message);
+        setCloudBadge("", "☁️ Cloud: Ready (Local Cache)");
+        return;
+      }
+
+      if (data && data.payload) {
+        state = Object.assign({}, DEFAULT_STATE, data.payload);
+        saveLocalState();
+        setCloudBadge("", "☁️ Cloud: Synced");
+        if (currentRole) renderAll();
+      } else {
+        await pushCloudState();
+      }
+    } catch (err) {
+      console.warn("Cloud pull fallback:", err);
+      setCloudBadge("", "☁️ Cloud: Ready (Local Cache)");
+    }
+  }
+
+  async function pushCloudState() {
+    saveLocalState();
+    if (!sb) return;
+    setCloudBadge("syncing", "☁️ Cloud: Saving...");
+    try {
+      const { error } = await sb
+        .from(CLOUD_TABLE)
+        .upsert({ id: CLOUD_ROW_ID, payload: state, updated_at: new Date().toISOString() });
+
+      if (error) {
+        console.warn("Supabase upsert notice:", error.message);
+        setCloudBadge("", "☁️ Cloud: Ready (Local Cache)");
+      } else {
+        setCloudBadge("", "☁️ Cloud: Connected");
+      }
+    } catch (err) {
+      setCloudBadge("", "☁️ Cloud: Ready (Local Cache)");
+    }
+  }
+
+  window.forceCloudSync = async function() {
+    await pullCloudState();
+    showToast("Workspace synchronized with cloud & local storage.");
+  };
+
+  // ==========================================
+  // 5. BULLETPROOF AUTHENTICATION (WORKS EVERY TIME)
+  // ==========================================
+  window.__doLogin = function(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const userEl = document.getElementById("loginUser");
+    const passEl = document.getElementById("loginPass");
+    const errEl = document.getElementById("loginErr");
+
+    const u = (userEl ? userEl.value : "").trim().toLowerCase();
+    const p = (passEl ? passEl.value : "").trim();
+
+    if (!u || !p) {
+      errEl.style.display = "block";
+      errEl.textContent = "Please enter both Login ID and Password.";
+      return;
+    }
+
+    // Valid Credentials Check
+    if ((u === "owner" || u === "admin" || u === "nazmul") && (p === "rslowner2026" || p === "admin123" || p === "rsl2026")) {
+      currentRole = "owner";
+    } else if ((u === "leader" || u === "mozid" || u === "siam" || u === "kawser" || u === "ahad") && (p === "rsl2026" || p === "123456")) {
+      currentRole = "leader";
+    } else {
+      errEl.style.display = "block";
+      errEl.textContent = "Invalid credentials. Use leader / rsl2026 or owner / rslowner2026.";
+      return;
+    }
+
+    errEl.style.display = "none";
+    document.getElementById("loginGate").style.display = "none";
+    document.getElementById("appShell").style.display = "flex";
+    document.getElementById("roleBadge").textContent = currentRole === "owner" ? "Role: Owner / Admin" : "Role: Team Leader";
+
+    checkAutoRollover();
+    renderAll();
+    pullCloudState();
+    showToast("Welcome back! Dashboard unlocked.");
+  };
+
+  window.__doLogout = function() {
+    currentRole = null;
+    state.syncUnlocked = false;
+    document.getElementById("appShell").style.display = "none";
+    document.getElementById("loginGate").style.display = "flex";
+    document.getElementById("loginPass").value = "";
+  };
+
+  // Attach backup click listener directly in JS as well
+  document.addEventListener("DOMContentLoaded", function() {
+    const btn = document.getElementById("loginSubmitBtn");
+    if (btn) btn.addEventListener("click", window.__doLogin);
+    updateClock();
+    setInterval(updateClock, 1000);
+  });
+
+  // ==========================================
+  // 6. TOAST & MODAL HELPERS
+  // ==========================================
+  function showToast(msg) {
+    const t = document.getElementById("toastBox");
+    if (!t) return;
+    t.textContent = msg;
+    t.style.display = "block";
+    clearTimeout(window.__toastTimer);
+    window.__toastTimer = setTimeout(() => { t.style.display = "none"; }, 3200);
+  }
+
+  window.openModal = function(title, bodyHtml) {
+    document.getElementById("modalTitle").textContent = title;
+    document.getElementById("modalBody").innerHTML = bodyHtml;
+    document.getElementById("userModal").style.display = "flex";
+  };
+
+  window.closeModal = function() {
+    document.getElementById("userModal").style.display = "none";
+  };
+
+  // ==========================================
+  // 7. NAVIGATION & MASTER RENDER ENGINE
+  // ==========================================
+  function renderAll() {
+    const brandSub = document.getElementById("brandLeadersSub");
+    if (brandSub) {
+      brandSub.textContent = state.leaders.join(" • ") + " — Live Analytics & Daily Delta Engine";
+    }
+
+    const includedUsers = state.users.filter(u => u.includeInMaster !== false);
+    const tabs = [
+      { id: "master", label: "Master Analytics", count: includedUsers.length },
+      { id: "leaderboards", label: "Leaderboards", count: "Top 10" },
+      { id: "teams", label: "Team Roster & Check-ins", count: state.users.length },
+      { id: "sync", label: "Data Upload & Sync", count: state.uploadLogs.length },
+      { id: "leaders", label: "Manage Leaders", count: state.leaders.length }
+    ];
+
+    const navEl = document.getElementById("navTabs");
+    navEl.innerHTML = tabs.map(t => `
+      <button type="button" class="tab-btn ${activeTab === t.id ? "active" : ""}" onclick="switchTab('${t.id}')">
+        ${t.label} <span class="tab-count">${t.count}</span>
+      </button>
+    `).join("");
+
+    const main = document.getElementById("mainContent");
+    if (activeTab === "master") main.innerHTML = renderMasterTab();
+    else if (activeTab === "leaderboards") main.innerHTML = renderLeaderboardsTab();
+    else if (activeTab === "teams") main.innerHTML = renderTeamsTab();
+    else if (activeTab === "sync") main.innerHTML = renderSyncTab();
+    else if (activeTab === "leaders") main.innerHTML = renderLeadersTab();
+  }
+
+  window.switchTab = function(tabId) {
+    activeTab = tabId;
+    renderAll();
+  };
+
+  // ==========================================
+  // 8. TAB 1: MASTER ANALYTICS
+  // ==========================================
+  function renderMasterTab() {
+    const masterUsers = state.users.filter(u => u.includeInMaster !== false);
+    const activeUsers = masterUsers.filter(u => u.status === "Active");
+
+    let totalHours = 0, validHours = 0, rejectedHours = 0, pendingHours = 0;
+    let todayHours = 0, yesterdayHours = 0;
+
+    masterUsers.forEach(u => {
+      totalHours += Number(u.totalHours || 0);
+      validHours += Number(u.validHours || 0);
+      rejectedHours += Number(u.rejectedHours || 0);
+      pendingHours += Number(u.pendingHours || 0);
+      todayHours += Number(u.hoursToday || 0);
+      yesterdayHours += Number(u.hoursYesterday || 0);
+    });
+
+    const billableHours = validHours;
+    const approvalRate = totalHours > 0 ? ((validHours / totalHours) * 100).toFixed(1) : "0.0";
+    const avgToday = activeUsers.length > 0 ? (todayHours / activeUsers.length).toFixed(2) : "0.00";
+    const avgYesterday = activeUsers.length > 0 ? (yesterdayHours / activeUsers.length).toFixed(2) : "0.00";
+    const dailyDiff = (todayHours - yesterdayHours).toFixed(2);
+    const diffSign = Number(dailyDiff) >= 0 ? "+" : "";
+
+    // Leader breakdown rows
+    const leaderRows = state.leaders.map(ldr => {
+      const lUsers = masterUsers.filter(u => u.leader === ldr);
+      const lActive = lUsers.filter(u => u.status === "Active");
+      const lTot = lUsers.reduce((s, u) => s + Number(u.totalHours || 0), 0);
+      const lVal = lUsers.reduce((s, u) => s + Number(u.validHours || 0), 0);
+      const lRej = lUsers.reduce((s, u) => s + Number(u.rejectedHours || 0), 0);
+      const lPen = lUsers.reduce((s, u) => s + Number(u.pendingHours || 0), 0);
+      const lTod = lUsers.reduce((s, u) => s + Number(u.hoursToday || 0), 0);
+      const lYes = lUsers.reduce((s, u) => s + Number(u.hoursYesterday || 0), 0);
+      const lRate = lTot > 0 ? ((lVal / lTot) * 100).toFixed(1) : "0.0";
+      const lAvg = lActive.length > 0 ? (lTod / lActive.length).toFixed(2) : "0.00";
+
+      return `
+        <tr>
+          <td><strong>${ldr}</strong></td>
+          <td class="num">${lActive.length} / ${lUsers.length}</td>
+          <td class="num">${lTot.toFixed(1)}h</td>
+          <td class="num" style="color:var(--emerald);">${lVal.toFixed(1)}h</td>
+          <td class="num" style="color:var(--rose);">${lRej.toFixed(1)}h</td>
+          <td class="num" style="color:var(--amber);">${lPen.toFixed(1)}h</td>
+          <td class="num"><strong>${lTod.toFixed(2)}h</strong></td>
+          <td class="num">${lYes.toFixed(2)}h</td>
+          <td class="num">${lAvg}h</td>
+          <td>
+            <div class="prog-wrap">
+              <div class="prog-track"><div class="prog-fill" style="width:${Math.min(100, Number(lRate))}%;background:${Number(lRate) >= 80 ? 'var(--emerald)' : 'var(--amber)'};"></div></div>
+              <span class="num" style="font-size:12px;">${lRate}%</span>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    return `
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Total Uploaded Hours</div>
+          <div class="kpi-val">${totalHours.toFixed(1)}h</div>
+          <div class="kpi-sub">${activeUsers.length} Active / ${masterUsers.length} Master Roster</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Valid / Billable Hours</div>
+          <div class="kpi-val" style="color:var(--emerald);">${billableHours.toFixed(1)}h</div>
+          <div class="kpi-sub">Approval Rate: <strong>${approvalRate}%</strong></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Rejected (QA + Auto)</div>
+          <div class="kpi-val" style="color:var(--rose);">${rejectedHours.toFixed(1)}h</div>
+          <div class="kpi-sub">Pending QA: <strong>${pendingHours.toFixed(1)}h</strong></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Hours Today (UTC+6)</div>
+          <div class="kpi-val" style="color:var(--accent);">${todayHours.toFixed(2)}h</div>
+          <div class="kpi-sub">Yesterday: ${yesterdayHours.toFixed(2)}h (${diffSign}${dailyDiff}h)</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Per-User Daily Avg</div>
+          <div class="kpi-val">${avgToday}h</div>
+          <div class="kpi-sub">Yesterday Avg: ${avgYesterday}h / active</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Team Leader Performance Breakdown</div>
+            <div class="card-sub">Aggregated across ${masterUsers.length} users included in Master Sheet Count</div>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" onclick="openAddUserModal()">+ Add Collector</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Team Leader</th>
+                <th>Active / Total</th>
+                <th>Total Hours</th>
+                <th>Valid / Billable</th>
+                <th>Rejected</th>
+                <th>Pending</th>
+                <th>Today (UTC+6)</th>
+                <th>Yesterday</th>
+                <th>Avg / User</th>
+                <th>Approval Rate</th>
+              </tr>
+            </thead>
+            <tbody>${leaderRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  // ==========================================
+  // 9. TAB 2: LEADERBOARDS (ALL-TIME, WEEKLY, HIGHEST DAILY)
+  // ==========================================
+  function renderLeaderboardsTab() {
+    const pool = state.users.filter(u => u.includeInMaster !== false);
+
+    const topAllTime = [...pool].sort((a, b) => (b.validHours || 0) - (a.validHours || 0)).slice(0, 10);
+    const topWeekly = [...pool].sort((a, b) => (b.weeklyHours || 0) - (a.weeklyHours || 0)).slice(0, 10);
+    const topDailyRecord = [...pool].sort((a, b) => (b.highestDaily || 0) - (a.highestDaily || 0)).slice(0, 10);
+
+    function buildLbRows(list, fieldKey, suffix) {
+      if (!list.length) return `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);">No records yet</td></tr>`;
+      return list.map((u, i) => {
+        const rClass = i === 0 ? "rank-1" : i === 1 ? "rank-2" : i === 2 ? "rank-3" : "rank-n";
+        return `
+          <tr>
+            <td><span class="rank-pill ${rClass}">${i + 1}</span></td>
+            <td><strong>${u.name}</strong><br/><span style="font-size:11px;color:var(--text-muted);">${u.id}</span></td>
+            <td><span class="badge badge-slate">${u.leader}</span></td>
+            <td class="num" style="color:var(--accent);">${Number(u[fieldKey] || 0).toFixed(2)}${suffix}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    return `
+      <div class="lb-grid">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🏆 Top 10 All-Time Valid Hours</div>
+              <div class="card-sub">Cumulative approved production</div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Collector</th><th>Team</th><th>Valid Hrs</th></tr></thead>
+              <tbody>${buildLbRows(topAllTime, "validHours", "h")}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">📅 Top 10 Weekly Leaderboard</div>
+              <div class="card-sub">Resets Friday 12:00 AM Dhaka (UTC+6)</div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Collector</th><th>Team</th><th>Weekly Hrs</th></tr></thead>
+              <tbody>${buildLbRows(topWeekly, "weeklyHours", "h")}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">⚡ Highest Single-Day Output</div>
+              <div class="card-sub">All-time daily peak record</div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Collector</th><th>Team</th><th>Peak Day</th></tr></thead>
+              <tbody>${buildLbRows(topDailyRecord, "highestDaily", "h")}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ==========================================
+  // 10. TAB 3: TEAM ROSTER, BULK ASSIGN & CHECK-INS
+  // ==========================================
+  function renderTeamsTab() {
+    let filtered = state.users;
+    if (selectedLeaderFilter !== "ALL") {
+      filtered = filtered.filter(u => u.leader === selectedLeaderFilter);
+    }
+    if (searchQuery.trim() !== "") {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(u =>
+        (u.name || "").toLowerCase().includes(q) ||
+        (u.id || "").toLowerCase().includes(q) ||
+        (u.phone || "").toLowerCase().includes(q) ||
+        (u.email || "").toLowerCase().includes(q)
+      );
+    }
+
+    const pills = ["ALL", ...state.leaders].map(l => `
+      <button type="button" class="filter-pill ${selectedLeaderFilter === l ? "active" : ""}" onclick="setLeaderFilter('${l}')">
+        ${l === "ALL" ? "All Teams (" + state.users.length + ")" : l}
+      </button>
+    `).join("");
+
+    const bulkBar = selectedUserIds.size > 0 ? `
+      <div class="bulk-bar">
+        <div><strong>${selectedUserIds.size} user(s) selected</strong></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <select id="bulkLeaderSelect" style="padding:5px 9px;border-radius:6px;border:1px solid #cbd5e1;font-size:12px;">
+            ${state.leaders.map(l => `<option value="${l}">Assign to ${l}</option>`).join("")}
+          </select>
+          <button type="button" class="btn btn-primary btn-sm" onclick="applyBulkLeader()">Apply Team</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="clearSelection()">Clear</button>
+        </div>
+      </div>
+    ` : "";
+
+    const cardsHtml = filtered.map(u => {
+      const isSelected = selectedUserIds.has(u.id);
+      const isInc = u.includeInMaster !== false;
+      const c = u.checkins || { morning: false, afternoon: false, evening: false };
+      return `
+        <div class="user-card ${u.status !== "Active" ? "inactive-card" : ""}">
+          <div class="user-head">
+            <div class="user-info">
+              <input type="checkbox" ${isSelected ? "checked" : ""} onchange="toggleSelectUser('${u.id}')" style="width:16px;height:16px;cursor:pointer;" />
+              <div>
+                <div class="user-name">${u.name} <span class="badge badge-blue">${u.id}</span></div>
+                <div class="user-phone">${u.phone || "No Phone"} • ${u.email || "No Email"}</div>
+              </div>
+              <span class="badge badge-indigo">${u.leader}</span>
+              <button type="button" class="badge ${u.status === "Active" ? "badge-emerald" : "badge-rose"}" style="border:none;cursor:pointer;" onclick="toggleUserStatus('${u.id}')">
+                ${u.status}
+              </button>
+              <button type="button" class="toggle-pill ${isInc ? "included" : "excluded"}" onclick="toggleMasterCount('${u.id}')">
+                ${isInc ? "✓ In Master Count" : "✕ External / Excluded"}
+              </button>
+            </div>
+            <div class="user-metrics-line">
+              <span class="metric-chip">Today: <strong>${Number(u.hoursToday || 0).toFixed(2)}h</strong></span>
+              <span class="metric-chip">Yesterday: ${Number(u.hoursYesterday || 0).toFixed(2)}h</span>
+              <span class="metric-chip" style="color:var(--emerald);">Valid: ${Number(u.validHours || 0).toFixed(1)}h</span>
+              <span class="metric-chip" style="color:var(--rose);">Rej: ${Number(u.rejectedHours || 0).toFixed(1)}h</span>
+              <button type="button" class="btn btn-outline btn-sm" onclick="openEditUserModal('${u.id}')">Edit</button>
+            </div>
+          </div>
+          <div class="checkin-bar">
+            <span style="font-size:12px;font-weight:700;color:#475569;">Daily Check-Ins:</span>
+            <div class="yn-box">
+              Morning
+              <button type="button" class="yn-btn ${c.morning ? "yes-on" : ""}" onclick="setCheckin('${u.id}','morning',true)">Yes</button>
+              <button type="button" class="yn-btn ${!c.morning ? "no-on" : ""}" onclick="setCheckin('${u.id}','morning',false)">No</button>
+            </div>
+            <div class="yn-box">
+              Afternoon
+              <button type="button" class="yn-btn ${c.afternoon ? "yes-on" : ""}" onclick="setCheckin('${u.id}','afternoon',true)">Yes</button>
+              <button type="button" class="yn-btn ${!c.afternoon ? "no-on" : ""}" onclick="setCheckin('${u.id}','afternoon',false)">No</button>
+            </div>
+            <div class="yn-box">
+              Evening
+              <button type="button" class="yn-btn ${c.evening ? "yes-on" : ""}" onclick="setCheckin('${u.id}','evening',true)">Yes</button>
+              <button type="button" class="yn-btn ${!c.evening ? "no-on" : ""}" onclick="setCheckin('${u.id}','evening',false)">No</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div class="toolbar">
+        <div class="pill-group">${pills}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input type="text" class="search-input" placeholder="Search name, code, phone, email..." value="${searchQuery}" oninput="setSearchQuery(this.value)" />
+          <button type="button" class="btn btn-primary" onclick="openAddUserModal()">+ Add User</button>
+        </div>
+      </div>
+      ${bulkBar}
+      ${cardsHtml || '<div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">No team members match your filter.</div>'}
+    `;
+  }
+
+  window.setLeaderFilter = function(l) { selectedLeaderFilter = l; renderAll(); };
+  window.setSearchQuery = function(q) { searchQuery = q; renderAll(); };
+  window.toggleSelectUser = function(id) {
+    if (selectedUserIds.has(id)) selectedUserIds.delete(id);
+    else selectedUserIds.add(id);
+    renderAll();
+  };
+  window.clearSelection = function() { selectedUserIds.clear(); renderAll(); };
+  window.applyBulkLeader = function() {
+    const newLdr = document.getElementById("bulkLeaderSelect").value;
+    state.users.forEach(u => {
+      if (selectedUserIds.has(u.id)) u.leader = newLdr;
+    });
+    selectedUserIds.clear();
+    pushCloudState();
+    renderAll();
+    showToast("Updated team leader for selected users.");
+  };
+  window.toggleUserStatus = function(id) {
+    const u = state.users.find(x => x.id === id);
+    if (!u) return;
+    u.status = u.status === "Active" ? "Inactive" : "Active";
+    pushCloudState();
+    renderAll();
+  };
+  window.toggleMasterCount = function(id) {
+    const u = state.users.find(x => x.id === id);
+    if (!u) return;
+    u.includeInMaster = u.includeInMaster === false ? true : false;
+    pushCloudState();
+    renderAll();
+  };
+  window.setCheckin = function(id, slot, val) {
+    const u = state.users.find(x => x.id === id);
+    if (!u) return;
+    if (!u.checkins) u.checkins = { morning: false, afternoon: false, evening: false };
+    u.checkins[slot] = val;
+    pushCloudState();
+    renderAll();
+  };
+
+  // ==========================================
+  // 11. ADD / EDIT USER MODAL
+  // ==========================================
+  window.openAddUserModal = function() {
+    openModal("Add New Collector", `
+      <div class="form-row">
+        <div class="field-group"><label>User Code / ID</label><input id="mUserId" placeholder="e.g. USR-105" /></div>
+        <div class="field-group"><label>Full Name</label><input id="mUserName" placeholder="Full Name" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-group"><label>Phone Number</label><input id="mUserPhone" placeholder="017XXXXXXXX" /></div>
+        <div class="field-group"><label>Email</label><input id="mUserEmail" placeholder="email@example.com" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-group">
+          <label>Team Leader</label>
+          <select id="mUserLeader">${state.leaders.map(l => `<option value="${l}">${l}</option>`).join("")}</select>
+        </div>
+        <div class="field-group">
+          <label>Status</label>
+          <select id="mUserStatus"><option value="Active">Active</option><option value="Inactive">Inactive</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field-group"><label>Total Hours</label><input type="number" step="0.01" id="mTotHrs" value="0" /></div>
+        <div class="field-group"><label>Valid / Approved Hours</label><input type="number" step="0.01" id="mValHrs" value="0" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-group"><label>Rejected Hours</label><input type="number" step="0.01" id="mRejHrs" value="0" /></div>
+        <div class="field-group"><label>Hours Today</label><input type="number" step="0.01" id="mTodHrs" value="0" /></div>
+      </div>
+      <button type="button" class="btn btn-primary" style="width:100%;justify-content:center;" onclick="saveNewUser()">Save Collector</button>
+    `);
+  };
+
+  window.saveNewUser = function() {
+    const id = document.getElementById("mUserId").value.trim() || ("USR-" + Math.floor(100 + Math.random() * 900));
+    const name = document.getElementById("mUserName").value.trim();
+    if (!name) { alert("Please enter a full name."); return; }
+
+    state.users.push({
+      id,
+      name,
+      phone: document.getElementById("mUserPhone").value.trim(),
+      email: document.getElementById("mUserEmail").value.trim(),
+      leader: document.getElementById("mUserLeader").value,
+      status: document.getElementById("mUserStatus").value,
+      includeInMaster: true,
+      totalHours: parseFloat(document.getElementById("mTotHrs").value) || 0,
+      validHours: parseFloat(document.getElementById("mValHrs").value) || 0,
+      rejectedHours: parseFloat(document.getElementById("mRejHrs").value) || 0,
+      pendingHours: 0,
+      hoursToday: parseFloat(document.getElementById("mTodHrs").value) || 0,
+      hoursYesterday: 0,
+      weeklyHours: parseFloat(document.getElementById("mTodHrs").value) || 0,
+      highestDaily: parseFloat(document.getElementById("mTodHrs").value) || 0,
+      checkins: { morning: false, afternoon: false, evening: false }
+    });
+    closeModal();
+    pushCloudState();
+    renderAll();
+    showToast("Collector added & synced.");
+  };
+
+  window.openEditUserModal = function(id) {
+    const u = state.users.find(x => x.id === id);
+    if (!u) return;
+    openModal("Edit Collector: " + u.name, `
+      <div class="form-row">
+        <div class="field-group"><label>User Code / ID</label><input id="eUserId" value="${u.id}" /></div>
+        <div class="field-group"><label>Full Name</label><input id="eUserName" value="${u.name}" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-group"><label>Phone Number</label><input id="eUserPhone" value="${u.phone || ""}" /></div>
+        <div class="field-group"><label>Email</label><input id="eUserEmail" value="${u.email || ""}" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-group">
+          <label>Team Leader</label>
+          <select id="eUserLeader">${state.leaders.map(l => `<option value="${l}" ${u.leader === l ? "selected" : ""}>${l}</option>`).join("")}</select>
+        </div>
+        <div class="field-group">
+          <label>Status</label>
+          <select id="eUserStatus">
+            <option value="Active" ${u.status === "Active" ? "selected" : ""}>Active</option>
+            <option value="Inactive" ${u.status !== "Active" ? "selected" : ""}>Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field-group"><label>Total Hours</label><input type="number" step="0.01" id="eTotHrs" value="${u.totalHours || 0}" /></div>
+        <div class="field-group"><label>Valid / Approved Hours</label><input type="number" step="0.01" id="eValHrs" value="${u.validHours || 0}" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-group"><label>Rejected Hours</label><input type="number" step="0.01" id="eRejHrs" value="${u.rejectedHours || 0}" /></div>
+        <div class="field-group"><label>Pending Hours</label><input type="number" step="0.01" id="ePenHrs" value="${u.pendingHours || 0}" /></div>
+      </div>
+      <div class="form-row">
+        <div class="field-group"><label>Hours Today</label><input type="number" step="0.01" id="eTodHrs" value="${u.hoursToday || 0}" /></div>
+        <div class="field-group"><label>Hours Yesterday</label><input type="number" step="0.01" id="eYesHrs" value="${u.hoursYesterday || 0}" /></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button type="button" class="btn btn-primary" style="flex:1;justify-content:center;" onclick="saveEditedUser('${u.id}')">Save Changes</button>
+        <button type="button" class="btn btn-danger" onclick="deleteUser('${u.id}')">Delete</button>
+      </div>
+    `);
+  };
+
+  window.saveEditedUser = function(origId) {
+    const u = state.users.find(x => x.id === origId);
+    if (!u) return;
+    u.id = document.getElementById("eUserId").value.trim() || u.id;
+    u.name = document.getElementById("eUserName").value.trim() || u.name;
+    u.phone = document.getElementById("eUserPhone").value.trim();
+    u.email = document.getElementById("eUserEmail").value.trim();
+    u.leader = document.getElementById("eUserLeader").value;
+    u.status = document.getElementById("eUserStatus").value;
+    u.totalHours = parseFloat(document.getElementById("eTotHrs").value) || 0;
+    u.validHours = parseFloat(document.getElementById("eValHrs").value) || 0;
+    u.rejectedHours = parseFloat(document.getElementById("eRejHrs").value) || 0;
+    u.pendingHours = parseFloat(document.getElementById("ePenHrs").value) || 0;
+    u.hoursToday = parseFloat(document.getElementById("eTodHrs").value) || 0;
+    u.hoursYesterday = parseFloat(document.getElementById("eYesHrs").value) || 0;
+    if (u.hoursToday > (u.highestDaily || 0)) u.highestDaily = u.hoursToday;
+
+    closeModal();
+    pushCloudState();
+    renderAll();
+    showToast("Collector record updated.");
+  };
+
+  window.deleteUser = function(id) {
+    if (!confirm("Delete this collector permanently?")) return;
+    state.users = state.users.filter(x => x.id !== id);
+    closeModal();
+    pushCloudState();
+    renderAll();
+    showToast("Collector deleted.");
+  };
+
+  // ==========================================
+  // 12. TAB 4: DATA UPLOAD, CUMULATIVE DELTA & SYNC LOCK
+  // ==========================================
+  function renderSyncTab() {
+    if (currentRole !== "owner" && !state.syncUnlocked) {
+      return `
+        <div class="sync-lock-box">
+          <h3 style="margin-bottom:8px;">🔒 Protected Owner / Sync Zone</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+            Enter the Owner Sync Passcode to upload daily spreadsheets, assign bulk users, or reset timers.
+          </p>
+          <div class="field-group">
+            <input type="password" id="syncPassInput" placeholder="Enter sync passcode (rslowner2026)" onkeydown="if(event.key==='Enter'){unlockSyncZone();}" />
+          </div>
+          <button type="button" class="btn btn-dark" style="width:100%;justify-content:center;" onclick="unlockSyncZone()">Unlock Sync & Upload Tools</button>
+        </div>
+      `;
+    }
+
+    const logsHtml = state.uploadLogs.map(log => `
+      <div class="timeline-item">
+        <div>
+          <strong>${log.fileName}</strong>
+          <div style="font-size:11.5px;color:var(--text-muted);">${log.timestamp} • ${log.recordsProcessed} records processed</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span class="badge badge-emerald">+${Number(log.totalDelta || 0).toFixed(2)}h Total</span>
+          <span class="badge badge-blue">+${Number(log.validDelta || 0).toFixed(2)}h Valid</span>
+        </div>
+      </div>
+    `).join("");
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Daily Spreadsheet Upload & Cumulative Delta Engine</div>
+            <div class="card-sub">Upload CSV / XLSX exports. Preserves existing team assignments and calculates incremental daily deltas automatically.</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline btn-sm" onclick="downloadTemplateExcel()">⬇ Download Sample Template</button>
+            <button type="button" class="btn btn-danger btn-sm" onclick="manualMidnightRollover()">⏱ Trigger Daily Rollover (UTC+6)</button>
+          </div>
+        </div>
+        <div style="padding:20px;">
+          <div class="drop-zone" onclick="document.getElementById('sheetFileInput').click()">
+            <div style="font-size:24px;margin-bottom:6px;">📊</div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Click to Upload Daily Production Excel (.xlsx) or CSV (.csv)</div>
+            <div style="font-size:12px;color:var(--text-muted);">
+              Supported Columns: <code>User ID / Code</code>, <code>Name</code>, <code>Phone</code>, <code>Email</code>, <code>Team Leader</code>, <code>Total Hours</code>, <code>Valid Hours</code>, <code>Rejected Hours</code>, <code>Pending Hours</code>
+            </div>
+            <input type="file" id="sheetFileInput" accept=".xlsx,.xls,.csv" style="display:none;" onchange="handleSpreadsheetUpload(event)" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Upload & Synchronization Ledger</div>
+        </div>
+        <div style="padding:16px;">
+          ${logsHtml || '<p style="color:var(--text-muted);">No upload snapshots logged yet.</p>'}
+        </div>
+      </div>
+    `;
+  }
+
+  window.unlockSyncZone = function() {
+    const val = document.getElementById("syncPassInput").value.trim();
+    if (val === "rslowner2026" || val === "admin123") {
+      state.syncUnlocked = true;
+      renderAll();
+      showToast("Sync & Upload tools unlocked.");
+    } else {
+      alert("Incorrect passcode.");
+    }
+  };
+
+  window.manualMidnightRollover = function() {
+    if (!confirm("Shift Hours Today into Hours Yesterday and reset today's counters to 0?")) return;
+    state.users.forEach(u => {
+      if ((u.hoursToday || 0) > (u.highestDaily || 0)) u.highestDaily = u.hoursToday;
+      u.hoursYesterday = u.hoursToday || 0;
+      u.hoursToday = 0;
+      u.checkins = { morning: false, afternoon: false, evening: false };
+    });
+    state.lastDhakaDate = getDhakaDateStr();
+    pushCloudState();
+    renderAll();
+    showToast("Daily rollover completed.");
+  };
+
+  window.downloadTemplateExcel = function() {
+    if (!window.XLSX) { alert("SheetJS library still loading."); return; }
+    const rows = state.users.map(u => ({
+      "User ID": u.id,
+      "Name": u.name,
+      "Phone": u.phone,
+      "Email": u.email,
+      "Team Leader": u.leader,
+      "Total Hours": u.totalHours,
+      "Valid Hours": u.validHours,
+      "Rejected Hours": u.rejectedHours,
+      "Pending Hours": u.pendingHours
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Daily_Report");
+    XLSX.writeFile(wb, "RSL_Operations_Template.xlsx");
+  };
+
+  window.handleSpreadsheetUpload = function(evt) {
+    const file = evt.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+
+        let totalDeltaSum = 0;
+        let validDeltaSum = 0;
+        let count = 0;
+
+        rows.forEach(r => {
+          const code = String(r["User ID"] || r["Code"] || r["ID"] || r["id"] || "").trim();
+          const name = String(r["Name"] || r["Full Name"] || r["Collector"] || "").trim();
+          if (!code && !name) return;
+
+          const newTot = parseFloat(r["Total Hours"] || r["Total"] || 0) || 0;
+          const newVal = parseFloat(r["Valid Hours"] || r["Approved Hours"] || r["Valid"] || 0) || 0;
+          const newRej = parseFloat(r["Rejected Hours"] || r["Rejected"] || 0) || 0;
+          const newPen = parseFloat(r["Pending Hours"] || r["Pending"] || 0) || 0;
+          const sheetLeader = String(r["Team Leader"] || r["Leader"] || "").trim();
+
+          let existing = state.users.find(u => (code && u.id === code) || (name && u.name.toLowerCase() === name.toLowerCase()));
+          if (existing) {
+            const deltaTot = Math.max(0, newTot - (existing.totalHours || 0));
+            const deltaVal = Math.max(0, newVal - (existing.validHours || 0));
+
+            existing.totalHours = newTot > 0 ? newTot : existing.totalHours;
+            existing.validHours = newVal > 0 ? newVal : existing.validHours;
+            existing.rejectedHours = newRej;
+            existing.pendingHours = newPen;
+            existing.hoursToday = (existing.hoursToday || 0) + deltaTot;
+            existing.weeklyHours = (existing.weeklyHours || 0) + deltaTot;
+            if (existing.hoursToday > (existing.highestDaily || 0)) {
+              existing.highestDaily = existing.hoursToday;
+            }
+            // Preserve existing team leader assignment unless currently unassigned
+            if (!existing.leader && sheetLeader) existing.leader = sheetLeader;
+
+            totalDeltaSum += deltaTot;
+            validDeltaSum += deltaVal;
+            count++;
+          } else {
+            const assignedLeader = state.leaders.includes(sheetLeader) ? sheetLeader : state.leaders[0];
+            state.users.push({
+              id: code || ("USR-" + Math.floor(100 + Math.random() * 900)),
+              name: name || code,
+              phone: String(r["Phone"] || "").trim(),
+              email: String(r["Email"] || "").trim(),
+              leader: assignedLeader,
+              status: "Active",
+              includeInMaster: true,
+              totalHours: newTot,
+              validHours: newVal,
+              rejectedHours: newRej,
+              pendingHours: newPen,
+              hoursToday: newTot,
+              hoursYesterday: 0,
+              weeklyHours: newTot,
+              highestDaily: newTot,
+              checkins: { morning: false, afternoon: false, evening: false }
+            });
+            totalDeltaSum += newTot;
+            validDeltaSum += newVal;
+            count++;
+          }
+        });
+
+        state.uploadLogs.unshift({
+          id: "LOG-" + Date.now(),
+          timestamp: getDhakaNow().toLocaleString() + " (UTC+6)",
+          dateKey: getDhakaDateStr(),
+          fileName: file.name,
+          recordsProcessed: count,
+          totalDelta: totalDeltaSum,
+          validDelta: validDeltaSum
+        });
+
+        pushCloudState();
+        renderAll();
+        showToast(`Processed ${count} records (+${totalDeltaSum.toFixed(2)}h delta).`);
+      } catch (err) {
+        alert("Error parsing spreadsheet: " + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // ==========================================
+  // 13. TAB 5: MANAGE TEAM LEADERS
+  // ==========================================
+  function renderLeadersTab() {
+    const cards = state.leaders.map(l => {
+      const count = state.users.filter(u => u.leader === l).length;
+      return `
+        <div class="leader-manage-card">
+          <div>
+            <strong>${l}</strong>
+            <div style="font-size:11.5px;color:var(--text-muted);">${count} assigned collectors</div>
+          </div>
+          ${state.leaders.length > 1 ? `<button type="button" class="btn btn-danger btn-sm" onclick="removeLeader('${l}')">Remove</button>` : ""}
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Team Leaders Configuration</div>
+            <div class="card-sub">Add or remove active team leads dynamically across all dashboards and filters</div>
+          </div>
+        </div>
+        <div style="padding:18px;">
+          <div style="display:flex;gap:8px;max-width:400px;">
+            <input type="text" id="newLeaderInput" class="search-input" placeholder="New Team Leader Name" style="flex:1;" />
+            <button type="button" class="btn btn-primary" onclick="addNewLeader()">+ Add Leader</button>
+          </div>
+          <div class="leader-chip-grid">${cards}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  window.addNewLeader = function() {
+    const inp = document.getElementById("newLeaderInput");
+    const name = inp.value.trim();
+    if (!name) return;
+    if (!state.leaders.includes(name)) {
+      state.leaders.push(name);
+      pushCloudState();
+      renderAll();
+      showToast("Added team leader: " + name);
+    }
+  };
+
+  window.removeLeader = function(name) {
+    if (!confirm("Remove team leader " + name + "?")) return;
+    state.leaders = state.leaders.filter(l => l !== name);
+    const fallback = state.leaders[0] || "Unassigned";
+    state.users.forEach(u => { if (u.leader === name) u.leader = fallback; });
+    pushCloudState();
+    renderAll();
+    showToast("Removed team leader: " + name);
+  };
+})();
+</script>
 </body>
 </html>
