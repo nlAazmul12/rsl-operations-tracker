@@ -919,7 +919,24 @@ function setCloudBadge(status, text) {
 }
 
 function normEmail(em) {
-  return String(em || '').trim().toLowerCase();
+  const cleaned = String(em || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().toLowerCase();
+  const m = cleaned.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/);
+  return m ? m[0] : cleaned;
+}
+
+function canonicalGmail(em) {
+  const clean = normEmail(em);
+  const atIdx = clean.indexOf('@');
+  if (atIdx === -1) return clean;
+  let local = clean.slice(0, atIdx);
+  let domain = clean.slice(atIdx + 1);
+  if (domain === 'googlemail.com') domain = 'gmail.com';
+  if (domain === 'gmail.com') {
+    const plusIdx = local.indexOf('+');
+    if (plusIdx !== -1) local = local.slice(0, plusIdx);
+    local = local.replace(/\./g, '');
+  }
+  return local + '@' + domain;
 }
 
 function normPhone(ph) {
@@ -1212,11 +1229,8 @@ function applyParsedPayload(parsed) {
   state.fridayWeekKey = parsed.fridayWeekKey || getFridayWeekKey(getDhakaNow());
   state.users = rawUsers;
 
-  const assignedSet = new Set();
-  state.users.forEach(u => {
-    (u.emails || []).forEach(em => assignedSet.add(normEmail(em.email)));
-  });
-  state.unmatched = (parsed.unmatched || []).filter(item => !assignedSet.has(normEmail(item.email)));
+  const lookup = buildAssignedEmailLookup();
+  state.unmatched = (parsed.unmatched || []).filter(item => !isEmailAlreadyAssigned(item.email, lookup));
   state.selectedUnmatched = (state.selectedUnmatched || []).filter(em =>
     state.unmatched.some(x => normEmail(x.email) === normEmail(em))
   );
@@ -1596,11 +1610,17 @@ function recomputeAllFromTimeline() {
     });
   });
 
+  // Build canonical fallback map so dotted Gmail variants also resolve to the right data point
+  const canonComputed = {};
+  Object.keys(emailComputed).forEach(k => {
+    canonComputed[canonicalGmail(k)] = emailComputed[k];
+  });
+
   // Apply computed time-series values back onto every user's email object WITHOUT removing or unassigning anyone
   state.users.forEach(u => {
     (u.emails || []).forEach(em => {
       const k = normEmail(em.email);
-      const comp = emailComputed[k];
+      const comp = emailComputed[k] || canonComputed[canonicalGmail(k)];
       if (!comp) return;
       const lr = comp.latestRec;
       em.totalHours = round2(lr.total);
@@ -1616,15 +1636,18 @@ function recomputeAllFromTimeline() {
     });
   });
 
-  // Also update unmatched queue with latest snapshot values so unmatched stays current
-  const assignedSet = new Set();
-  state.users.forEach(u => (u.emails || []).forEach(e => assignedSet.add(normEmail(e.email))));
+  // Also update unmatched queue with latest snapshot values so unmatched stays current (excluding all assigned emails)
+  const assignedLookup = buildAssignedEmailLookup();
   const latestDp = tl[tl.length - 1];
   if (latestDp && latestDp.records) {
     const existingUnMap = {};
-    (state.unmatched || []).forEach(x => { existingUnMap[normEmail(x.email)] = x; });
+    (state.unmatched || []).forEach(x => {
+      if (!isEmailAlreadyAssigned(x.email, assignedLookup)) {
+        existingUnMap[normEmail(x.email)] = x;
+      }
+    });
     Object.keys(latestDp.records).forEach(k => {
-      if (assignedSet.has(k)) return;
+      if (isEmailAlreadyAssigned(k, assignedLookup)) return;
       const lr = latestDp.records[k];
       if (existingUnMap[k]) {
         existingUnMap[k].totalHours = round2(lr.total);
@@ -1633,7 +1656,7 @@ function recomputeAllFromTimeline() {
         existingUnMap[k].pendingHours = round2(lr.pending);
       }
     });
-    state.unmatched = Object.values(existingUnMap).filter(x => !assignedSet.has(normEmail(x.email)));
+    state.unmatched = Object.values(existingUnMap).filter(x => !isEmailAlreadyAssigned(x.email, assignedLookup));
   }
 }
 
@@ -2289,6 +2312,12 @@ function readTargetSlot(prefixId) {
 }
 
 function renderSyncView() {
+  // Auto-prune any email in unmatched that is already assigned to a Team Leader (exact or canonical Gmail)
+  const _pruneLookup = buildAssignedEmailLookup();
+  if (Array.isArray(state.unmatched) && state.unmatched.some(x => isEmailAlreadyAssigned(x.email, _pruneLookup))) {
+    state.unmatched = state.unmatched.filter(x => !isEmailAlreadyAssigned(x.email, _pruneLookup));
+    saveState(false);
+  }
   if (!state.syncUnlocked) {
     return `
       <div class="sync-lock-box">
@@ -2919,35 +2948,203 @@ function readTabularFileRows(file, callback) {
   }
 }
 
+function normHeaderKey(h) {
+  return String(h || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
 function findHeaderRowAndCols(aoa) {
-  let headerRowIdx = -1;
-  let headers = [];
-  for (let r = 0; r < Math.min(10, aoa.length); r++) {
-    const candidate = (aoa[r] || []).map(h => String(h || '').trim().toLowerCase());
-    if (candidate.some(h => h === 'email' || h.includes('mail') || h.includes('gmail'))) {
-      headerRowIdx = r;
-      headers = candidate;
-      break;
+  if (!Array.isArray(aoa) || aoa.length === 0) return null;
+
+  const headerKeywords = [
+    'email', 'mail', 'gmail', 'name', 'username', 'user', 'collector', 'worker',
+    'phone', 'mobile', 'contact', 'number', 'leader', 'team', 'owner', 'code',
+    'total', 'billable', 'approved', 'valid', 'rejected', 'pending', 'hours', 'status'
+  ];
+
+  let bestRowIdx = -1;
+  let bestScore = 0;
+  let bestHeaders = [];
+
+  for (let r = 0; r < Math.min(25, aoa.length); r++) {
+    const row = aoa[r] || [];
+    const normCols = row.map(normHeaderKey);
+    let score = 0;
+    normCols.forEach(c => {
+      if (!c) return;
+      if (headerKeywords.some(kw => c === kw || c.includes(kw))) score += 2;
+      if (c === 'email' || c.includes('email') || c.includes('mail')) score += 5;
+    });
+    if (score > bestScore) {
+      bestScore = score;
+      bestRowIdx = r;
+      bestHeaders = normCols;
     }
   }
-  if (headerRowIdx === -1) return null;
+
+  // Fallback: if no header row had keywords, check if row 0 is data (contains an '@' email)
+  if (bestRowIdx === -1 || bestScore < 4) {
+    const firstDataRow = aoa.findIndex(r => (r || []).some(c => String(c || '').includes('@')));
+    if (firstDataRow > 0) {
+      bestRowIdx = firstDataRow - 1;
+      bestHeaders = (aoa[bestRowIdx] || []).map(normHeaderKey);
+    } else if (firstDataRow === 0) {
+      // Headerless sheet! Synthesize virtual header row at -1 and auto-detect columns from data
+      bestRowIdx = -1;
+      bestHeaders = [];
+    } else {
+      return null;
+    }
+  }
+
+  const findCol = (exactList, partialList, excludeList) => {
+    const excl = excludeList || [];
+    for (const ex of exactList) {
+      const idx = bestHeaders.findIndex(h => h === ex && !excl.some(x => h.includes(x)));
+      if (idx !== -1) return idx;
+    }
+    for (const pt of partialList) {
+      const idx = bestHeaders.findIndex(h => h.includes(pt) && !excl.some(x => h.includes(x)));
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  let idxEmail = findCol(
+    ['email', 'e mail', 'email address', 'gmail', 'mail', 'user email', 'collector email', 'account email'],
+    ['email', 'mail', 'gmail']
+  );
+
+  // Content-based auto-detection fallback for Email column if header name was unusual
+  if (idxEmail === -1) {
+    const sampleStart = bestRowIdx + 1;
+    const sampleEnd = Math.min(aoa.length, sampleStart + 15);
+    const colHits = {};
+    for (let r = sampleStart; r < sampleEnd; r++) {
+      (aoa[r] || []).forEach((cell, cIdx) => {
+        if (/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(String(cell || ''))) {
+          colHits[cIdx] = (colHits[cIdx] || 0) + 1;
+        }
+      });
+    }
+    let topCol = -1, topCount = 0;
+    Object.keys(colHits).forEach(k => {
+      if (colHits[k] > topCount) { topCount = colHits[k]; topCol = Number(k); }
+    });
+    idxEmail = topCol;
+  }
+
+  if (idxEmail === -1) return null;
+
+  const idxFullName = findCol(
+    ['full name', 'fullname', 'name', 'collector name', 'worker name', 'member name', 'collector'],
+    ['full name', 'fullname', 'collector', 'worker', 'member', 'name'],
+    ['username', 'user name', 'file', 'team', 'leader']
+  );
+  const idxUsername = findCol(
+    ['username', 'user name', 'platform username', 'handle', 'user', 'login'],
+    ['username', 'user name', 'handle', 'user'],
+    ['email', 'id', 'code']
+  );
+  const idxName = idxFullName !== -1 ? idxFullName : idxUsername;
+
+  let idxPhone = findCol(
+    ['phone', 'phone number', 'mobile', 'mobile number', 'contact', 'contact number', 'whatsapp', 'number', 'cell'],
+    ['phone', 'mobile', 'whatsapp', 'contact', 'cell', 'tel'],
+    ['id', 'code', 'recording', 'reject']
+  );
+
+  // Content-based fallback for Bangladeshi phone numbers (01XXXXXXXXX) if header wasn't labeled
+  if (idxPhone === -1) {
+    const sampleStart = bestRowIdx + 1;
+    const sampleEnd = Math.min(aoa.length, sampleStart + 15);
+    const phoneHits = {};
+    for (let r = sampleStart; r < sampleEnd; r++) {
+      (aoa[r] || []).forEach((cell, cIdx) => {
+        if (cIdx === idxEmail) return;
+        const d = normPhone(cell);
+        if (d.length === 11 && d.startsWith('01')) {
+          phoneHits[cIdx] = (phoneHits[cIdx] || 0) + 1;
+        }
+      });
+    }
+    let topP = -1, topPCount = 0;
+    Object.keys(phoneHits).forEach(k => {
+      if (phoneHits[k] > topPCount) { topPCount = phoneHits[k]; topP = Number(k); }
+    });
+    if (topPCount >= 2) idxPhone = topP;
+  }
+
+  const idxCode = findCol(
+    ['code', 'working code', 'ref', 'referral', 'referral code', 'team code', 'tag'],
+    ['code', 'ref'],
+    ['phone', 'zip', 'postal']
+  );
+
+  const idxLeader = findCol(
+    ['team leader', 'leader', 'team lead', 'lead', 'tl', 'team', 'owner', 'supervisor', 'manager'],
+    ['leader', 'team lead', 'team', 'owner', 'supervisor'],
+    ['code']
+  );
+
+  const idxStatus = findCol(
+    ['status', 'active', 'account status', 'state'],
+    ['status', 'active']
+  );
+
+  const idxTot = findCol(
+    ['totalhours', 'total hours', 'total hrs', 'total', 'logged hours', 'recorded hours', 'hours'],
+    ['totalhours', 'total hour', 'total hr', 'logged', 'total'],
+    ['reject', 'recording']
+  );
+
+  const idxBill = findCol(
+    ['billablehours', 'billable hours', 'billable', 'approvedhours', 'approved hours', 'approved', 'validhours', 'valid hours', 'valid'],
+    ['billable', 'approved', 'valid']
+  );
+
+  const idxRejProc = findCol(
+    ['rejectedprocessinghours', 'rejected processing hours', 'non qa', 'non qa rejected', 'processing rejected'],
+    ['processing', 'non qa', 'nonqa']
+  );
+
+  const idxRejAuto = findCol(
+    ['rejectedautoqahours', 'rejected auto qa hours', 'auto qa', 'auto qa rejected', 'qa rejected'],
+    ['autoqa', 'auto qa']
+  );
+
+  const idxRej = findCol(
+    ['rejectedhours', 'rejected hours', 'rejected', 'reject hours', 'reject'],
+    ['rejected', 'reject'],
+    ['processing', 'auto', 'reason', 'count', 'totalreject']
+  );
+
+  const idxPend = findCol(
+    ['pendinghours', 'pending hours', 'pending', 'in review'],
+    ['pending']
+  );
+
+  const idxDef = findCol(
+    ['deferredhours', 'deferred hours', 'deferred'],
+    ['deferred']
+  );
+
+  const detectedSummary = [];
+  if (idxEmail >= 0) detectedSummary.push(`Email (Col ${idxEmail + 1})`);
+  if (idxName >= 0) detectedSummary.push(`Name (Col ${idxName + 1})`);
+  if (idxPhone >= 0) detectedSummary.push(`Phone (Col ${idxPhone + 1})`);
+  if (idxLeader >= 0) detectedSummary.push(`Leader (Col ${idxLeader + 1})`);
+  if (idxCode >= 0) detectedSummary.push(`Code (Col ${idxCode + 1})`);
+  if (idxTot >= 0) detectedSummary.push(`Total Hrs (Col ${idxTot + 1})`);
+  if (idxBill >= 0) detectedSummary.push(`Valid/Approved (Col ${idxBill + 1})`);
+  if (idxRej >= 0 || idxRejProc >= 0 || idxRejAuto >= 0) detectedSummary.push(`Rejected`);
+  if (idxPend >= 0) detectedSummary.push(`Pending (Col ${idxPend + 1})`);
 
   return {
-    headerRowIdx,
-    headers,
-    idxEmail: headers.findIndex(h => h === 'email' || h.includes('mail')),
-    idxName: headers.findIndex(h => h.includes('full') || h === 'name' || h === 'username' || h.includes('user')),
-    idxPhone: headers.findIndex(h => h.includes('phone') || h.includes('mobile') || h.includes('contact') || h.includes('number')),
-    idxCode: headers.findIndex(h => h.includes('code') || h.includes('ref')),
-    idxLeader: headers.findIndex(h => h.includes('leader') || h.includes('owner') || h.includes('team')),
-    idxStatus: headers.findIndex(h => h.includes('status') || h.includes('active')),
-    idxTot: headers.findIndex(h => h === 'totalhours' || h.includes('total hour') || h === 'total'),
-    idxBill: headers.findIndex(h => h === 'billablehours' || h.includes('approved') || h.includes('valid') || h.includes('billable')),
-    idxRej: headers.findIndex(h => h === 'rejectedhours' || h === 'rejected' || h.includes('reject')),
-    idxRejProc: headers.findIndex(h => h === 'rejectedprocessinghours'),
-    idxRejAuto: headers.findIndex(h => h === 'rejectedautoqahours'),
-    idxPend: headers.findIndex(h => h === 'pendinghours' || h.includes('pending')),
-    idxDef: headers.findIndex(h => h === 'deferredhours')
+    headerRowIdx: bestRowIdx,
+    headers: bestHeaders,
+    detectedSummary: detectedSummary.join(' • '),
+    idxEmail, idxName, idxFullName, idxUsername, idxPhone, idxCode, idxLeader, idxStatus,
+    idxTot, idxBill, idxRej, idxRejProc, idxRejAuto, idxPend, idxDef
   };
 }
 
@@ -2979,7 +3176,7 @@ function applyBucketToEmailMetrics(emObj, newTotals, bucket) {
   }
 }
 
-// Smart entity matcher: finds an existing contributor by Email, normalized Phone, or exact Full Name
+// Smart entity matcher: finds an existing contributor by Exact Email, Canonical Gmail (dot-insensitive), normalized Phone, or exact Full Name
 function findMatchingContributor({ cleanEm, cleanPhone, rawName }) {
   // 1. Exact Email match first
   if (cleanEm) {
@@ -2987,19 +3184,51 @@ function findMatchingContributor({ cleanEm, cleanPhone, rawName }) {
       const emObj = (u.emails || []).find(e => normEmail(e.email) === cleanEm);
       if (emObj) return { user: u, emObj, matchedBy: 'email' };
     }
+    // 1b. Canonical Gmail match (handles dotted variants like a.b@gmail.com == ab@gmail.com)
+    const canon = canonicalGmail(cleanEm);
+    for (const u of state.users) {
+      const emObj = (u.emails || []).find(e => canonicalGmail(e.email) === canon);
+      if (emObj) return { user: u, emObj, matchedBy: 'gmail_canonical' };
+    }
   }
   // 2. Normalized Phone match (if phone provided and valid length >= 8)
   if (cleanPhone && cleanPhone.length >= 8) {
     const byPhone = state.users.find(u => u.phone && normPhone(u.phone) === cleanPhone);
     if (byPhone) return { user: byPhone, emObj: null, matchedBy: 'phone' };
   }
-  // 3. Exact Full Name match (case-insensitive, ignoring generic auto-prefixes)
+  // 3. Exact Full Name match (case-insensitive)
   if (rawName && rawName.length >= 3) {
-    const qName = rawName.toLowerCase();
+    const qName = rawName.trim().toLowerCase();
     const byName = state.users.find(u => u.fullName && u.fullName.trim().toLowerCase() === qName);
     if (byName) return { user: byName, emObj: null, matchedBy: 'name' };
   }
   return null;
+}
+
+function buildAssignedEmailLookup() {
+  const exactMap = {};
+  const canonMap = {};
+  state.users.forEach(u => {
+    (u.emails || []).forEach(em => {
+      const k = normEmail(em.email);
+      const ck = canonicalGmail(em.email);
+      if (k) {
+        if (!exactMap[k]) exactMap[k] = [];
+        exactMap[k].push({ user: u, emObj: em });
+      }
+      if (ck) {
+        if (!canonMap[ck]) canonMap[ck] = [];
+        canonMap[ck].push({ user: u, emObj: em });
+      }
+    });
+  });
+  return { exactMap, canonMap };
+}
+
+function isEmailAlreadyAssigned(em, lookup) {
+  const k = normEmail(em);
+  const ck = canonicalGmail(em);
+  return Boolean((lookup.exactMap[k] && lookup.exactMap[k].length > 0) || (lookup.canonMap[ck] && lookup.canonMap[ck].length > 0));
 }
 
 function handleBulkRosterUpload(ev) {
@@ -3187,7 +3416,7 @@ function handleBulkRosterUpload(ev) {
     if (rep) {
       rep.innerHTML = `
         <div style="padding:12px;border-radius:9px;background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;font-size:13px;">
-          <strong>Smart Bulk Roster Complete (${escapeHtml(slot.bucket.toUpperCase())} • ${escapeHtml(slot.dtStr)}):</strong>
+          <strong>Smart Bulk Roster Complete (${escapeHtml(slot.bucket.toUpperCase())} • ${escapeHtml(slot.dtStr)}):</strong><br/><span style="font-size:11.5px;color:#047857;">Auto-Detected Columns: ${escapeHtml(meta.detectedSummary || 'Standard')}</span><br/>
           New Users Created: <strong>${newlyCreatedUsers}</strong> •
           Emails Linked to Existing Users (by Phone/Name): <strong>${attachedToExistingUser}</strong> •
           Duplicates Updated (No Double-Count): <strong>${duplicatesUpdated}</strong> •
@@ -3252,15 +3481,7 @@ function handleCsvFileUpload(ev) {
     const parsedSlot = parseSlotToTimestampMs(slot.dtStr);
     const isBaselineUpload = (slot.bucket === 'baseline');
 
-    const emailIndex = {};
-    state.users.forEach(u => {
-      (u.emails || []).forEach(em => {
-        const k = normEmail(em.email);
-        if (!k) return;
-        if (!emailIndex[k]) emailIndex[k] = [];
-        emailIndex[k].push({ user: u, emObj: em });
-      });
-    });
+    const assignedLookup = buildAssignedEmailLookup();
 
     let matchedCount = 0;
     const seenUnmatched = new Set();
@@ -3271,6 +3492,7 @@ function handleCsvFileUpload(ev) {
 
     rows.forEach(r => {
       const k = normEmail(r.email);
+      const ck = canonicalGmail(r.email);
       dpRecords[k] = {
         total: r.totalHours,
         approved: r.approvedHours,
@@ -3279,7 +3501,7 @@ function handleCsvFileUpload(ev) {
         rejectedAutoQa: r.rejectedAutoQa,
         pending: r.pendingHours
       };
-      const hits = emailIndex[k];
+      const hits = assignedLookup.exactMap[k] || assignedLookup.canonMap[ck];
       if (hits && hits.length > 0) {
         matchedCount++;
         hits.forEach(h => {
@@ -3324,12 +3546,15 @@ function handleCsvFileUpload(ev) {
     });
     state.uploadHistory = state.uploadHistory.slice(0, 25);
 
-    // Merge any new unmatched emails without losing existing unmatched
-    const assignedSet = new Set();
-    state.users.forEach(u => (u.emails || []).forEach(e => assignedSet.add(normEmail(e.email))));
+    // Merge any new unmatched emails without adding any already-assigned user (like rafsanai228@gmail.com)
+    const freshLookup = buildAssignedEmailLookup();
     const mergedUn = {};
-    (state.unmatched || []).forEach(x => { if (!assignedSet.has(normEmail(x.email))) mergedUn[normEmail(x.email)] = x; });
-    newUnmatched.forEach(x => { if (!assignedSet.has(normEmail(x.email))) mergedUn[normEmail(x.email)] = x; });
+    (state.unmatched || []).forEach(x => {
+      if (!isEmailAlreadyAssigned(x.email, freshLookup)) mergedUn[normEmail(x.email)] = x;
+    });
+    newUnmatched.forEach(x => {
+      if (!isEmailAlreadyAssigned(x.email, freshLookup)) mergedUn[normEmail(x.email)] = x;
+    });
     state.unmatched = Object.values(mergedUn);
     state.selectedUnmatched = [];
 
@@ -3344,7 +3569,7 @@ function handleCsvFileUpload(ev) {
     if (rep) {
       rep.innerHTML = `
         <div style="padding:12px;border-radius:9px;background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;font-size:13px;">
-          <strong>Time-Series Upload Logged [${escapeHtml(slot.bucket.toUpperCase())} • Target: ${escapeHtml(slot.dtStr)}]:</strong>
+          <strong>Time-Series Upload Logged [${escapeHtml(slot.bucket.toUpperCase())} • Target: ${escapeHtml(slot.dtStr)}]:</strong><br/><span style="font-size:11.5px;color:#047857;">Auto-Detected Columns: ${escapeHtml(meta.detectedSummary || 'Standard')}</span><br/>
           Processed ${rows.length} rows • Matched <strong>${matchedCount}</strong> accounts (${breakdownStr}) • Unmatched Queue: ${newUnmatched.length}.
         </div>
       `;
