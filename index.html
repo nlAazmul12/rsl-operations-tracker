@@ -864,8 +864,8 @@ try {
 } catch (e) { console.warn('Supabase init:', e); }
 
 const DEFAULT_LEADERS = ['Mozid', 'Siam', 'Kawser', 'Ahad'];
-const LOCAL_STATE_KEY = 'rsl_tracker_data_v6';
-const LOCAL_CHECKPOINTS_KEY = 'rsl_clean_checkpoints_v2';
+const LOCAL_STATE_KEY = 'rsl_tracker_data_v7';
+const LOCAL_CHECKPOINTS_KEY = 'rsl_clean_checkpoints_v3';
 
 let state = {
   role: 'leader',
@@ -886,11 +886,13 @@ let state = {
   },
   dhakaDateStr: '',
   fridayWeekKey: '',
-  // Date-wise ledger: dailyLedger['2026-11-15'][cleanReachEmail] = { total, approved, rejected, pending }
+  // Date-wise ledger: dailyLedger['2026-11-16'][cleanReachEmail] = { total, approved, rejected, pending }
   dailyLedger: {},
   // Permanent Date-Wise End-of-Day Vault (deep-merged on sync so it NEVER vanishes!)
   dailySheetVault: {},
-  // Cumulative snapshot baseline per email for delta calculation: cumulativeSnapshots[cleanReachEmail] = { total, timestampMs, dtStr }
+  // Permanent Cloud-Synced Checkpoints (deep-merged across all devices so Restore buttons NEVER vanish!)
+  cloudCheckpoints: [],
+  // Cumulative snapshot baseline per email for delta calculation
   cumulativeSnapshots: {},
   users: [],
   unmatched: [],
@@ -901,7 +903,6 @@ let state = {
 let cloudSyncTimer = null;
 let cloudPollTimer = null;
 let isPushingCloud = false;
-let cleanCheckpointsList = [];
 const pendingAtomicPatches = {};
 
 function isLeaderCounted(leaderName) {
@@ -1026,14 +1027,18 @@ function round2(n) {
 }
 
 // =========================================================================
-// BUILD VERIFIED BASELINE FROM MERGED ROSTER + ALL-TIME + 14/15/16 NOV SHEETS
+// BUILD VERIFIED BASELINE (FIXED CALENDAR DATES: 2026-11-14, 2026-11-15, 2026-11-16)
+// NEVER DUMPS OLD PRELOADED SHEETS INTO NOV 17 OR FUTURE DATES ON NEW PHONES!
 // =========================================================================
 function buildBaselineState() {
   const dNow = getDhakaNow();
   const todayStr = formatDhakaDate(dNow);
-  const yestStr = getOffsetDhakaDate(-1);
-  const twoDaysStr = getOffsetDhakaDate(-2);
   const friKey = getFridayWeekKey(dNow);
+
+  // HARD-LOCKED HISTORICAL DATES so opening on a phone on Nov 17+ NEVER puts Nov 16's 103.35h into Today!
+  const FIXED_NOV_14 = '2026-11-14';
+  const FIXED_NOV_15 = '2026-11-15';
+  const FIXED_NOV_16 = '2026-11-16';
 
   state.leaders = [...DEFAULT_LEADERS];
   state.leaderVisibility = {};
@@ -1058,7 +1063,6 @@ function buildBaselineState() {
       const code = String(emObj.code || 'REACH').trim().toUpperCase();
       const g3 = isG3Code(code);
 
-      // STRICT RULE: G3V2LQ emails NEVER match REACH platform CSV sheets; their hours come from manual entry only!
       let rec = null;
       if (!g3) {
         rec = PRELOADED_SNAP_ALL[cleanEm] || canonAllMap[canonicalGmail(cleanEm)] || null;
@@ -1102,7 +1106,6 @@ function buildBaselineState() {
     });
   });
 
-  // Build dailyLedger for 14 Nov, 15 Nov (Yesterday), and 16 Nov (Today) from the exact single-day sheets
   function buildDayMap(snapObj) {
     const dayMap = {};
     Object.keys(snapObj).forEach(k => {
@@ -1118,17 +1121,16 @@ function buildBaselineState() {
   }
 
   state.dailyLedger = {
-    [twoDaysStr]: buildDayMap(PRELOADED_SNAP_14),
-    [yestStr]: buildDayMap(PRELOADED_SNAP_15),
-    [todayStr]: buildDayMap(PRELOADED_SNAP_16)
+    [FIXED_NOV_14]: buildDayMap(PRELOADED_SNAP_14),
+    [FIXED_NOV_15]: buildDayMap(PRELOADED_SNAP_15),
+    [FIXED_NOV_16]: buildDayMap(PRELOADED_SNAP_16)
   };
 
-  // Seed cumulativeSnapshots from All-Time A-Z so future cumulative uploads calculate exact incremental delta
   state.cumulativeSnapshots = {};
   Object.keys(PRELOADED_SNAP_ALL).forEach(k => {
     state.cumulativeSnapshots[k] = {
       total: round2(PRELOADED_SNAP_ALL[k].t),
-      dtStr: todayStr + ' Baseline'
+      dtStr: FIXED_NOV_16 + ' Baseline'
     };
   });
 
@@ -1157,10 +1159,13 @@ function buildBaselineState() {
   state.lastSyncTime = 'Verified Baseline (All-Time + 14/15/16 Nov)';
   state.updatedAt = 0;
 
-  // Seed permanent Date-Wise Vault entries for 14 Nov, 15 Nov, and 16 Nov
-  recordAutoDailyJsonBackup(twoDaysStr, 'only 14 nov 24 hours.csv', 'single_day', Object.keys(PRELOADED_SNAP_14).length, Object.keys(PRELOADED_SNAP_14).length, twoDaysStr + ' (24h Sheet)');
-  recordAutoDailyJsonBackup(yestStr, 'only 15nov 24 hours.csv', 'single_day', Object.keys(PRELOADED_SNAP_15).length, Object.keys(PRELOADED_SNAP_15).length, yestStr + ' (24h Sheet)');
-  recordAutoDailyJsonBackup(todayStr, 'only 16 nov till now.csv', 'single_day', Object.keys(PRELOADED_SNAP_16).length, Object.keys(PRELOADED_SNAP_16).length, todayStr + ' (Live Sheet)');
+  state.dailySheetVault = {};
+  recordAutoDailyJsonBackup(FIXED_NOV_14, 'only 14 nov 24 hours.csv', 'single_day', Object.keys(PRELOADED_SNAP_14).length, Object.keys(PRELOADED_SNAP_14).length, FIXED_NOV_14 + ' (24h Sheet)');
+  recordAutoDailyJsonBackup(FIXED_NOV_15, 'only 15nov 24 hours.csv', 'single_day', Object.keys(PRELOADED_SNAP_15).length, Object.keys(PRELOADED_SNAP_15).length, FIXED_NOV_15 + ' (24h Sheet)');
+  recordAutoDailyJsonBackup(FIXED_NOV_16, 'only 16 nov till now.csv', 'single_day', Object.keys(PRELOADED_SNAP_16).length, Object.keys(PRELOADED_SNAP_16).length, FIXED_NOV_16 + ' (24h Sheet)');
+
+  // Seed permanent checkpoints for 14 Nov, 15 Nov, and 16 Nov so Restore buttons are ALWAYS visible!
+  seedInitialCheckpoints();
 
   window.__safeStore.set(LOCAL_STATE_KEY, JSON.stringify(buildSerializablePayload()));
 }
@@ -1197,14 +1202,67 @@ function usersMapToArray(usersField) {
     });
 }
 
+function buildCompactRestoreSnapshot() {
+  return {
+    leaders: JSON.parse(JSON.stringify(state.leaders || [])),
+    leaderVisibility: JSON.parse(JSON.stringify(state.leaderVisibility || {})),
+    dailyLedger: JSON.parse(JSON.stringify(state.dailyLedger || {})),
+    cumulativeSnapshots: JSON.parse(JSON.stringify(state.cumulativeSnapshots || {})),
+    users: JSON.parse(JSON.stringify(state.users || [])),
+    unmatched: JSON.parse(JSON.stringify(state.unmatched || [])),
+    dhakaDateStr: state.dhakaDateStr,
+    fridayWeekKey: state.fridayWeekKey,
+    lastSyncTime: state.lastSyncTime
+  };
+}
+
+function mergeCheckpointsArrays(arrA, arrB) {
+  const byId = {};
+  [...(arrA || []), ...(arrB || [])].forEach(cp => {
+    if (!cp || !cp.id) return;
+    if (!byId[cp.id] || (Number(cp.updatedAt) || 0) > (Number(byId[cp.id].updatedAt) || 0)) {
+      byId[cp.id] = cp;
+    }
+  });
+  return Object.values(byId)
+    .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
+    .slice(0, 12);
+}
+
+function seedInitialCheckpoints() {
+  const existing = getCleanCheckpoints();
+  if (existing.length > 0) {
+    state.cloudCheckpoints = existing;
+    return;
+  }
+  const allStats = getLeaderStats('ALL');
+  const snap = buildCompactRestoreSnapshot();
+  const baseEntry = {
+    id: 'cp_verified_baseline_14_15_16_nov',
+    slotName: '2026-11-16 • Verified Baseline',
+    note: 'Verified Roster + 14/15/16 Nov Sheets (2026-11-17 starts at 0.00h)',
+    savedAt: '2026-11-16 23:59 BST',
+    updatedAt: 1700000000000,
+    userCount: state.users.length,
+    totalHours: allStats.totalHours,
+    todayHours: 0,
+    yesterdayHours: 103.35,
+    payload: snap
+  };
+  state.cloudCheckpoints = [baseEntry];
+  window.__safeStore.set(LOCAL_CHECKPOINTS_KEY, JSON.stringify(state.cloudCheckpoints));
+}
+
 function buildSerializablePayload() {
   const authCfg = window.__getAuthCfg ? window.__getAuthCfg() : { extraLogins: [] };
+  state.cloudCheckpoints = mergeCheckpointsArrays(state.cloudCheckpoints, getCleanCheckpoints());
   return {
     leaders: state.leaders,
     leaderVisibility: state.leaderVisibility || {},
     extraLogins: authCfg.extraLogins || [],
     dailyLedger: state.dailyLedger || {},
     dailySheetVault: state.dailySheetVault || {},
+    cloudCheckpoints: state.cloudCheckpoints || [],
     cumulativeSnapshots: state.cumulativeSnapshots || {},
     settings: state.settings,
     dhakaDateStr: state.dhakaDateStr,
@@ -1256,15 +1314,18 @@ function applyParsedPayload(parsed) {
     window.__saveAuthCfg(cfg);
   }
 
-  // DEEP MERGE dailyLedger & dailySheetVault so saved dates NEVER vanish!
+  // Keep each date slot in dailyLedger exact (no additive mixing of old + new within the same date), while preserving all other dates!
   const mergedLedger = Object.assign({}, state.dailyLedger || {});
   if (parsed.dailyLedger && typeof parsed.dailyLedger === 'object') {
     Object.keys(parsed.dailyLedger).forEach(dk => {
-      mergedLedger[dk] = Object.assign({}, mergedLedger[dk] || {}, parsed.dailyLedger[dk] || {});
+      if (parsed.dailyLedger[dk] && typeof parsed.dailyLedger[dk] === 'object') {
+        mergedLedger[dk] = JSON.parse(JSON.stringify(parsed.dailyLedger[dk]));
+      }
     });
   }
   state.dailyLedger = mergedLedger;
 
+  // Deep merge dailySheetVault so saved dates and their Restore buttons NEVER vanish!
   const mergedVault = Object.assign({}, state.dailySheetVault || {});
   if (parsed.dailySheetVault && typeof parsed.dailySheetVault === 'object') {
     Object.keys(parsed.dailySheetVault).forEach(dk => {
@@ -1272,6 +1333,12 @@ function applyParsedPayload(parsed) {
     });
   }
   state.dailySheetVault = mergedVault;
+
+  // Deep merge cloudCheckpoints + local checkpoints so major updates and Restore buttons NEVER vanish on sync!
+  if (Array.isArray(parsed.cloudCheckpoints)) {
+    state.cloudCheckpoints = mergeCheckpointsArrays(state.cloudCheckpoints, parsed.cloudCheckpoints);
+    window.__safeStore.set(LOCAL_CHECKPOINTS_KEY, JSON.stringify(state.cloudCheckpoints));
+  }
 
   state.cumulativeSnapshots = Object.assign({}, state.cumulativeSnapshots || {}, parsed.cumulativeSnapshots || {});
   state.settings = parsed.settings || state.settings;
@@ -1312,7 +1379,7 @@ function scheduleCloudPush() {
 }
 
 // =========================================================================
-// CLEAN 3-SLOT DAILY CHECKPOINTS (MORNING / AFTERNOON / NIGHT + BEFORE UPLOAD)
+// PERMANENT CLOUD-SYNCED CHECKPOINTS (NEVER OVERWRITES PREVIOUS MAJOR UPDATES!)
 // =========================================================================
 function getDaySlotLabel(d) {
   const hr = d.getHours();
@@ -1324,41 +1391,40 @@ function getDaySlotLabel(d) {
 function saveCleanCheckpoint(customSlotName, noteText) {
   const d = getDhakaNow();
   const dateKey = formatDhakaDate(d);
-  const slotName = customSlotName || `${dateKey} • ${getDaySlotLabel(d)}`;
-  const cpId = 'cp_' + slotName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  const timeStr = `${dateKey} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')} BST`;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  const slotName = customSlotName || `${dateKey} • ${getDaySlotLabel(d)} (${hh}:${mm})`;
+  // Unique ID per major update so a new upload NEVER overwrites an earlier backup from the same morning/afternoon!
+  const cpId = 'cp_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  const timeStr = `${dateKey} ${hh}:${mm}:${ss} BST`;
   const allStats = getLeaderStats('ALL');
-
-  const compactPayload = JSON.parse(JSON.stringify(buildSerializablePayload()));
-  delete compactPayload.dailySheetVault;
 
   const entry = {
     id: cpId,
     slotName: slotName,
-    note: noteText || 'Auto Checkpoint',
+    note: noteText || 'Saved Checkpoint',
     savedAt: timeStr,
     updatedAt: Date.now(),
-    userCount: compactPayload.users.length,
+    userCount: state.users.length,
     totalHours: allStats.totalHours,
     todayHours: allStats.todayHours,
     yesterdayHours: allStats.yesterdayHours,
-    payload: compactPayload
+    payload: buildCompactRestoreSnapshot()
   };
 
-  const existing = getCleanCheckpoints();
-  const filtered = existing.filter(x => x && x.id !== cpId);
-  filtered.unshift(entry);
-  const trimmed = filtered.slice(0, 9); // Keep max 9 clean slots (3 per day x 3 days)
-  cleanCheckpointsList = trimmed;
-  window.__safeStore.set(LOCAL_CHECKPOINTS_KEY, JSON.stringify(trimmed));
+  state.cloudCheckpoints = mergeCheckpointsArrays([entry], getCleanCheckpoints());
+  window.__safeStore.set(LOCAL_CHECKPOINTS_KEY, JSON.stringify(state.cloudCheckpoints));
   if (state.activeTab === 'Sync' && state.syncUnlocked) renderMain();
 }
 
 function getCleanCheckpoints() {
+  let localArr = [];
   try {
     const raw = window.__safeStore.get(LOCAL_CHECKPOINTS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) { return []; }
+    if (raw) localArr = JSON.parse(raw);
+  } catch (e) {}
+  return mergeCheckpointsArrays(state.cloudCheckpoints || [], localArr);
 }
 
 function restoreCleanCheckpoint(cpId) {
@@ -1368,8 +1434,15 @@ function restoreCleanCheckpoint(cpId) {
     alert('Checkpoint not found.');
     return;
   }
-  if (!confirm(`Restore checkpoint "${cp.slotName}" (${cp.savedAt})? Your Date-Wise Vault will stay intact.`)) return;
+  if (!confirm(`Restore checkpoint "${cp.slotName}" (${cp.savedAt})?\n\nThis will restore your exact hours & roster from that moment and sync it to Cloud.`)) return;
+
+  // Save current state as a checkpoint before restoring, so you can even undo a restore!
+  saveCleanCheckpoint(null, 'Auto-Backup Before Restore');
+
+  // Replace dailyLedger with the checkpoint's exact dailyLedger so bad phone hours are wiped out cleanly!
+  state.dailyLedger = JSON.parse(JSON.stringify(cp.payload.dailyLedger || {}));
   if (!applyParsedPayload(cp.payload)) return;
+  state.dailyLedger = JSON.parse(JSON.stringify(cp.payload.dailyLedger || {}));
   state.lastSyncTime = 'Restored: ' + cp.slotName;
   saveState(false);
   updateTopbarSubtitle();
@@ -1378,14 +1451,20 @@ function restoreCleanCheckpoint(cpId) {
   showToast('Restored checkpoint: ' + cp.slotName);
 }
 
+function deleteCleanCheckpoint(cpId) {
+  if (!confirm('Remove this checkpoint slot?')) return;
+  state.cloudCheckpoints = getCleanCheckpoints().filter(x => x.id !== cpId);
+  window.__safeStore.set(LOCAL_CHECKPOINTS_KEY, JSON.stringify(state.cloudCheckpoints));
+  saveState(false);
+  renderMain();
+}
+
 function recordAutoDailyJsonBackup(dateKey, filename, modeLabel, matchedRows, totalRows, dtStr) {
   state.dailySheetVault = state.dailySheetVault || {};
   const key = dateKey || formatDhakaDate(getDhakaNow());
   const dayMap = (state.dailyLedger || {})[key] || {};
   const dayTotalHrs = Object.values(dayMap).reduce((s, r) => s + (Number(r.total) || 0), 0);
-
-  const snapshotCopy = JSON.parse(JSON.stringify(buildSerializablePayload()));
-  delete snapshotCopy.dailySheetVault;
+  const dayAppHrs = Object.values(dayMap).reduce((s, r) => s + (Number(r.approved) || 0), 0);
 
   state.dailySheetVault[key] = {
     dateKey: key,
@@ -1395,8 +1474,30 @@ function recordAutoDailyJsonBackup(dateKey, filename, modeLabel, matchedRows, to
     matchedRows: matchedRows != null ? matchedRows : Object.keys(dayMap).length,
     totalRows: totalRows != null ? totalRows : Object.keys(dayMap).length,
     dayHours: round2(dayTotalHrs),
-    payloadJson: snapshotCopy
+    dayApproved: round2(dayAppHrs),
+    dayMapSnapshot: JSON.parse(JSON.stringify(dayMap)),
+    payloadJson: buildCompactRestoreSnapshot()
   };
+}
+
+function restoreDailyVaultState(dateKey) {
+  const entry = (state.dailySheetVault || {})[dateKey];
+  if (!entry) { alert('No vault entry found for ' + dateKey); return; }
+  if (!confirm(`Restore workspace to the saved vault state for ${dateKey} (${entry.filename})?`)) return;
+  saveCleanCheckpoint(null, `Before Vault Restore (${dateKey})`);
+  if (entry.payloadJson && entry.payloadJson.users) {
+    state.dailyLedger = JSON.parse(JSON.stringify(entry.payloadJson.dailyLedger || state.dailyLedger));
+    applyParsedPayload(entry.payloadJson);
+  } else if (entry.dayMapSnapshot) {
+    state.dailyLedger = state.dailyLedger || {};
+    state.dailyLedger[dateKey] = JSON.parse(JSON.stringify(entry.dayMapSnapshot));
+  }
+  state.lastSyncTime = `Restored Vault: ${dateKey} (${entry.filename})`;
+  saveState(false);
+  updateTopbarSubtitle();
+  renderTabs();
+  renderMain();
+  showToast(`Restored vault state for ${dateKey}!`);
 }
 
 async function pushStateToCloud(showAlertToast) {
@@ -1404,6 +1505,12 @@ async function pushStateToCloud(showAlertToast) {
   isPushingCloud = true;
   setCloudBadge('syncing', '☁️ Syncing...');
   try {
+    // If this device still has updatedAt === 0 (freshly opened phone), pull from cloud first so a fresh phone NEVER overwrites live laptop data!
+    if (state.updatedAt === 0 && !showAlertToast) {
+      isPushingCloud = false;
+      await pullStateFromCloud(true);
+      return;
+    }
     const payload = buildSerializablePayload();
     const { error } = await sbClient
       .from(SB_STATE_TABLE)
@@ -1413,7 +1520,7 @@ async function pushStateToCloud(showAlertToast) {
     if (showAlertToast) showToast('Synced to Supabase Cloud!');
   } catch (err) {
     setCloudBadge('ok', '☁️ Local + Vault Ready');
-    if (showAlertToast) showToast('Saved locally & to Date Vault (Run SQL in Supabase to enable multi-device sync)');
+    if (showAlertToast) showToast('Saved locally & to Date Vault');
   } finally {
     isPushingCloud = false;
   }
@@ -1431,15 +1538,25 @@ async function pullStateFromCloud(forceOverwrite) {
     if (error) throw error;
     const cloudData = data ? data.payload : null;
     if (!cloudData || (!cloudData.usersById && (!Array.isArray(cloudData.users) || cloudData.users.length === 0))) {
-      // Push our pre-loaded baseline to Supabase if cloud is currently empty!
-      await pushStateToCloud(false);
+      if (state.updatedAt > 0) await pushStateToCloud(false);
       return;
     }
 
     const cloudTs = Number(cloudData.updatedAt) || 0;
     const localTs = Number(state.updatedAt) || 0;
 
+    // Always merge cloudCheckpoints and dailySheetVault from cloud so Restore buttons NEVER disappear!
+    if (Array.isArray(cloudData.cloudCheckpoints)) {
+      state.cloudCheckpoints = mergeCheckpointsArrays(state.cloudCheckpoints, cloudData.cloudCheckpoints);
+      window.__safeStore.set(LOCAL_CHECKPOINTS_KEY, JSON.stringify(state.cloudCheckpoints));
+    }
+
     if (forceOverwrite || localTs === 0 || cloudTs > localTs) {
+      // Save a local safety checkpoint before cloud overwrites local state if Today's hours differ!
+      const curToday = getLeaderStats('ALL').todayHours;
+      if (localTs > 0 && curToday > 0 && Math.abs(curToday - 103.35) > 1) {
+        saveCleanCheckpoint(null, `Auto-Saved Before Cloud Sync (Today: ${curToday.toFixed(2)}h)`);
+      }
       const ok = applyParsedPayload(cloudData);
       if (ok) {
         updateTopbarSubtitle();
@@ -1464,6 +1581,8 @@ function loadState() {
     const parsed = JSON.parse(raw);
     if (!applyParsedPayload(parsed)) {
       buildBaselineState();
+    } else if (getCleanCheckpoints().length === 0) {
+      seedInitialCheckpoints();
     }
   } catch (e) {
     buildBaselineState();
@@ -1479,7 +1598,7 @@ function checkAutoRollovers(forceMidnight) {
   if (forceMidnight || (state.dhakaDateStr && state.dhakaDateStr !== nowDateStr)) {
     const closingDate = state.dhakaDateStr || nowDateStr;
     recordAutoDailyJsonBackup(closingDate, `Auto_Midnight_Backup_${closingDate}.json`, 'midnight_auto', state.users.length, state.users.length, closingDate + ' 11:59 PM BST');
-    saveCleanCheckpoint(`${closingDate} • Night (Auto)`, 'Before Midnight Rollover');
+    saveCleanCheckpoint(`${closingDate} • End of Day (Auto)`, `Midnight Rollover (${closingDate} → ${nowDateStr})`);
     state.users.forEach(u => {
       u.pickedUpCall = null;
       u.isWorking = null;
@@ -1517,7 +1636,6 @@ function getEmailMetrics(em) {
   const pending = round2(em.pendingHours);
   const approvalPct = total > 0 ? round2((approved / total) * 100) : 0;
 
-  // STRICT RULE: G3V2LQ hours are manual only and NEVER read from REACH date sheets
   if (isG3Code(em.code)) {
     return {
       total,
@@ -1545,7 +1663,6 @@ function getEmailMetrics(em) {
   Object.keys(ledger).forEach(dk => {
     const dayObj = ledger[dk];
     if (!dayObj) return;
-    // Match exact email or canonical Gmail (REACH only)
     let entry = dayObj[k];
     if (!entry) {
       const matchKey = Object.keys(dayObj).find(x => canonicalGmail(x) === ck);
@@ -1675,14 +1792,36 @@ function updateTopbarSubtitle() {
   }
 }
 
+// =========================================================================
+// QUICK FIX FOR THE 103.35h PHONE SYNC ACCIDENT ON NOV 17
+// =========================================================================
+function fixPhoneSyncTodayOverride() {
+  const todayStr = formatDhakaDate(getDhakaNow());
+  saveCleanCheckpoint(null, `Before Clearing Phone Sync Override (${todayStr})`);
+  if (state.dailyLedger && state.dailyLedger[todayStr]) {
+    delete state.dailyLedger[todayStr];
+  }
+  if (state.dailySheetVault && state.dailySheetVault[todayStr] && state.dailySheetVault[todayStr].filename === 'only 16 nov till now.csv') {
+    delete state.dailySheetVault[todayStr];
+  }
+  // Ensure 2026-11-16 has its exact 16 Nov data
+  const day16 = {};
+  Object.keys(PRELOADED_SNAP_16).forEach(k => {
+    const r = PRELOADED_SNAP_16[k];
+    day16[k] = { total: round2(r.t), approved: round2(r.b), rejected: round2(r.r), pending: round2(r.p) };
+  });
+  state.dailyLedger['2026-11-16'] = day16;
+  state.lastSyncTime = `Cleared Phone Sync Override (${todayStr} reset to 0.00h — ready for today's sheet)`;
+  saveState(false);
+  renderTabs();
+  renderMain();
+  showToast(`Cleared the 100+ hour phone override from ${todayStr}! Now upload today's 21h sheet.`);
+}
+
 window.__initDashboard = async function(role) {
   state.role = role || 'leader';
   state.syncUnlocked = (role === 'owner') || (window.__safeStore.getSess('rsl_sync_unlocked') === '1');
   loadState();
-  cleanCheckpointsList = getCleanCheckpoints();
-  if (cleanCheckpointsList.length === 0) {
-    saveCleanCheckpoint(null, 'Initial Verified Baseline');
-  }
   updateTopbarSubtitle();
   renderTabs();
   renderMain();
@@ -1838,6 +1977,18 @@ function renderMasterView() {
   const allStats = getLeaderStats('ALL');
   const countedLeaders = getCountedLeaders();
   const excludedLeaders = state.leaders.filter(l => !isLeaderCounted(l));
+  const todayStr = formatDhakaDate(getDhakaNow());
+
+  // Show a 1-click recovery banner if Today (2026-11-17) has the 100+ hour phone override
+  const phoneOverrideBanner = (todayStr !== '2026-11-16' && allStats.todayHours >= 95) ? `
+    <div style="padding:12px 16px;margin-bottom:16px;background:#fff1f2;border:1.5px solid #fda4af;border-radius:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <div style="color:#9f1239;font-size:13px;">
+        <strong>⚠️ Detected Nov 16 Pre-Loaded Hours (${allStats.todayHours.toFixed(2)}h) Sitting in Today (${todayStr}) from Phone Sync:</strong>
+        Click the button on the right to clear the phone override from ${todayStr} while keeping 14 Nov, 15 Nov, and 16 Nov intact.
+      </div>
+      <button type="button" class="btn btn-danger btn-sm" style="padding:7px 14px;" onclick="fixPhoneSyncTodayOverride()">✨ Fix Today (${todayStr}) Phone Override Now</button>
+    </div>
+  ` : '';
 
   const leaderRows = countedLeaders.map(l => {
     const s = getLeaderStats(l);
@@ -1871,6 +2022,7 @@ function renderMasterView() {
   ` : '';
 
   return `
+    ${phoneOverrideBanner}
     <div class="kpi-grid">
       <div class="kpi-card">
         <div class="kpi-label">Active Team Roster</div>
@@ -2118,7 +2270,6 @@ function renderLeaderView(leader) {
 }
 
 function renderSyncView() {
-  // Auto-prune any email in unmatched that is already assigned (REACH only; G3V2LQ never matches REACH CSVs)
   const _pruneLookup = buildAssignedEmailLookup();
   if (Array.isArray(state.unmatched) && state.unmatched.some(x => isEmailAlreadyAssigned(x.email, _pruneLookup))) {
     state.unmatched = state.unmatched.filter(x => !isEmailAlreadyAssigned(x.email, _pruneLookup));
@@ -2139,32 +2290,36 @@ function renderSyncView() {
   }
 
   const isOwner = state.role === 'owner';
-  const authCfg = window.__getAuthCfg();
   const todayStr = formatDhakaDate(getDhakaNow());
   const yestStr = getOffsetDhakaDate(-1);
   const twoDaysStr = getOffsetDhakaDate(-2);
 
-  // Clean 3-Slot Checkpoints List
-  const cpList = getCleanCheckpoints();
-  const checkpointsHtml = cpList.length > 0
-    ? cpList.map((cp, idx) => `
-        <div class="timeline-item">
-          <div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <span class="badge ${idx === 0 ? 'badge-emerald' : 'badge-indigo'}">${escapeHtml(cp.slotName)}</span>
-              <strong style="color:#0f172a;">${escapeHtml(cp.note)}</strong>
-              <span style="color:#64748b;">• ${escapeHtml(cp.savedAt)}</span>
-            </div>
-            <div style="font-size:11.5px;color:#475569;margin-top:3px;">
-              Roster: <strong>${cp.userCount}</strong> collectors • All-Time: <strong>${(cp.totalHours||0).toFixed(2)}h</strong> • Today: <strong>${(cp.todayHours||0).toFixed(2)}h</strong> • Yesterday: <strong>${(cp.yesterdayHours||0).toFixed(2)}h</strong>
-            </div>
-          </div>
-          <button type="button" class="btn btn-primary btn-sm" onclick="restoreCleanCheckpoint('${escapeJsAttr(cp.id)}')">↺ Restore Slot</button>
+  // Permanent Cloud-Synced Checkpoints List (ALWAYS has visible Restore buttons!)
+  let cpList = getCleanCheckpoints();
+  if (cpList.length === 0) {
+    seedInitialCheckpoints();
+    cpList = getCleanCheckpoints();
+  }
+  const checkpointsHtml = cpList.map((cp, idx) => `
+    <div class="timeline-item" style="background:#fff;border:1.5px solid ${idx === 0 ? '#6ee7b7' : '#cbd5e1'};">
+      <div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="badge ${idx === 0 ? 'badge-emerald' : 'badge-indigo'}">${escapeHtml(cp.slotName)}</span>
+          <strong style="color:#0f172a;">${escapeHtml(cp.note)}</strong>
+          <span style="color:#64748b;">• ${escapeHtml(cp.savedAt)}</span>
         </div>
-      `).join('')
-    : `<div style="padding:14px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:9px;color:#64748b;font-size:12.5px;text-align:center;">No checkpoints yet. Click <strong>+ Save Current Slot</strong> to save a point-in-time backup.</div>`;
+        <div style="font-size:11.5px;color:#475569;margin-top:3px;">
+          Roster: <strong>${cp.userCount}</strong> collectors • All-Time: <strong>${(cp.totalHours||0).toFixed(2)}h</strong> • Today: <strong style="color:#2563eb;">${(cp.todayHours||0).toFixed(2)}h</strong> • Yesterday: <strong>${(cp.yesterdayHours||0).toFixed(2)}h</strong>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button type="button" class="btn btn-primary btn-sm" style="padding:6px 12px;" onclick="restoreCleanCheckpoint('${escapeJsAttr(cp.id)}')">↺ Restore This Version</button>
+        ${cpList.length > 1 ? `<button type="button" class="btn btn-outline btn-sm" style="color:#e11d48;border-color:#fecdd3;" onclick="deleteCleanCheckpoint('${escapeJsAttr(cp.id)}')">✕</button>` : ''}
+      </div>
+    </div>
+  `).join('');
 
-  // Date-Wise Ledger & Vault Dates
+  // Date-Wise Ledger & Vault Dates (with permanent Restore button on every date!)
   const allDatesSet = new Set([
     ...Object.keys(state.dailyLedger || {}),
     ...Object.keys(state.dailySheetVault || {})
@@ -2179,7 +2334,7 @@ function renderSyncView() {
     const sumApp = Object.values(dayMap).reduce((s, r) => s + (Number(r.approved) || 0), 0);
     const tag = dk === todayStr ? '<span class="badge badge-blue">Today</span>' : (dk === yestStr ? '<span class="badge badge-amber">Yesterday</span>' : '');
     return `
-      <div class="timeline-item">
+      <div class="timeline-item" style="background:#fff;">
         <div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <span class="badge badge-emerald">📅 ${escapeHtml(dk)}</span> ${tag}
@@ -2190,6 +2345,7 @@ function renderSyncView() {
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${vEntry ? `<button type="button" class="btn btn-primary btn-sm" onclick="restoreDailyVaultState('${escapeJsAttr(dk)}')">↺ Restore Day State</button>` : ''}
           ${vEntry ? `<button type="button" class="btn btn-outline btn-sm" onclick="downloadDailyVaultJson('${escapeJsAttr(dk)}')">💾 JSON Backup</button>` : ''}
           <button type="button" class="btn btn-outline btn-sm" style="color:#e11d48;border-color:#fecdd3;" onclick="removeDailyVault('${escapeJsAttr(dk)}')">Clear Date</button>
         </div>
@@ -2288,23 +2444,24 @@ function renderSyncView() {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <div>
         <h2 style="font-size:18px;font-weight:800;">Date-Wise Sheet Upload, Day Vault & Protected Roster Sync</h2>
-        <p style="font-size:12.5px;color:#64748b;">REACH Auto-Sync • G3V2LQ Manual-Only Protection • Existing Team Leaders Never Overwritten.</p>
+        <p style="font-size:12.5px;color:#64748b;">Permanent Cloud-Synced Checkpoints • Fixed Calendar Dates • Zero Overwrite Protection.</p>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-danger" onclick="fixPhoneSyncTodayOverride()">✨ Fix Today (${todayStr}) Phone Override</button>
         <button type="button" class="btn btn-emerald" onclick="pushStateToCloud(true)">☁️ Sync to Supabase</button>
         <button type="button" class="btn btn-outline" onclick="pullStateFromCloud(true)">☁️ Pull from Supabase</button>
         <button type="button" class="btn btn-outline" onclick="lockSyncTab()">🔒 Lock Sync Tab</button>
       </div>
     </div>
 
-    <!-- SECTION 1: CLEAN 3-SLOT DAILY CHECKPOINTS -->
+    <!-- SECTION 1: PERMANENT CLOUD-SYNCED CHECKPOINTS -->
     <div class="card" style="border-top:4px solid #4f46e5;">
       <div class="card-header" style="background:#eef2ff;">
         <div>
-          <div class="card-title" style="color:#3730a3;">1. 🕒 Clean Daily Checkpoints (Morning • Afternoon • Night + Before Last Upload)</div>
-          <div class="card-sub">Step back cleanly to the exact state before any upload or edit without clutter</div>
+          <div class="card-title" style="color:#3730a3;">1. 🕒 Permanent Version Checkpoints (Cloud-Synced • Never Vanishes on Sync)</div>
+          <div class="card-sub">Every major upload and manual checkpoint is preserved here with a <strong>↺ Restore This Version</strong> button across all devices</div>
         </div>
-        <button type="button" class="btn btn-dark btn-sm" onclick="saveCleanCheckpoint(null, 'Manual Checkpoint');showToast('Saved checkpoint slot!');">+ Save Current Slot</button>
+        <button type="button" class="btn btn-dark btn-sm" onclick="saveCleanCheckpoint(null, 'Manual Saved Version');saveState(false);showToast('Saved permanent version checkpoint!');">+ Save Current Version</button>
       </div>
       <div style="padding:16px;display:grid;gap:8px;">
         ${checkpointsHtml}
@@ -2316,7 +2473,7 @@ function renderSyncView() {
       <div class="card-header" style="background:#ecfeff;">
         <div>
           <div class="card-title" style="color:#0e7490;">2. 🗄️ Permanent Date-Wise Ledger & JSON Archive Vault</div>
-          <div class="card-sub">Every date is stored independently and persists across reloads & devices. Download any day's JSON backup anytime.</div>
+          <div class="card-sub">Every date is locked to its exact calendar date (e.g. 2026-11-14, 2026-11-15, 2026-11-16, ${todayStr}) with its own <strong>↺ Restore Day State</strong> button</div>
         </div>
         <span class="badge badge-blue">Protected Vault</span>
       </div>
@@ -2332,7 +2489,7 @@ function renderSyncView() {
       <div class="card-header" style="background:#ecfdf5;">
         <div>
           <div class="card-title" style="color:#047857;">${isOwner ? '4' : '3'}. 📈 Upload Date-Wise Platform Sheet (.csv / .xlsx) — REACH Accounts Only</div>
-          <div class="card-sub">Choose whether your file is a <strong>Single-Day Export</strong> (e.g. only 14 nov, only 15 nov, only 16 nov) or an <strong>All-Time Cumulative Export</strong> (all time data a-z)</div>
+          <div class="card-sub">Choose whether your file is a <strong>Single-Day Export</strong> (sets exact hours for Target Date) or an <strong>All-Time Cumulative Export</strong></div>
         </div>
       </div>
       <div style="padding:18px;">
@@ -2342,14 +2499,14 @@ function renderSyncView() {
             <input type="date" id="csvTargetDate" value="${todayStr}" style="padding:7px 11px;border:1.5px solid #059669;border-radius:7px;font-size:13px;font-weight:700;background:#ecfdf5;color:#065f46;" />
             <span style="font-size:12.5px;font-weight:700;color:#065f46;">2. Sheet Type:</span>
             <select id="csvUploadType" style="flex:1;min-width:250px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:12.5px;font-weight:600;background:#f8fafc;">
-              <option value="single_day">Single-Day / 24h Sheet (Sets exact hours for Target Date — e.g. only 14/15/16 nov)</option>
+              <option value="single_day">Single-Day / 24h Sheet (Sets exact hours for Target Date — e.g. Today's 21h sheet)</option>
               <option value="cumulative_alltime">All-Time Cumulative Sheet (Updates All-Time Totals & calculates delta vs previous cumulative)</option>
             </select>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;width:100%;justify-content:space-between;align-items:center;">
             <span style="font-size:11.5px;color:#475569;">Note: <strong>G3V2LQ</strong> accounts are strictly protected and never matched or overwritten by REACH platform sheets.</span>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('csvTargetDate').value='${twoDaysStr}';document.getElementById('csvUploadType').value='single_day';">14 Nov (${twoDaysStr})</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('csvTargetDate').value='${twoDaysStr}';document.getElementById('csvUploadType').value='single_day';">2 Days Ago (${twoDaysStr})</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('csvTargetDate').value='${yestStr}';document.getElementById('csvUploadType').value='single_day';">Yesterday (${yestStr})</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('csvTargetDate').value='${todayStr}';document.getElementById('csvUploadType').value='single_day';">Today (${todayStr})</button>
             </div>
@@ -2454,7 +2611,7 @@ function renderSyncView() {
         <button type="button" class="btn btn-outline" onclick="exportBackupJson()">Download Full JSON Backup</button>
         <button type="button" class="btn btn-primary" onclick="document.getElementById('jsonRestoreInput').click()">Restore JSON Backup</button>
         <input type="file" id="jsonRestoreInput" accept=".json" style="display:none;" onchange="importBackupJson(event)" />
-        <button type="button" class="btn btn-danger" onclick="handleProtectedReset()">Reset to Verified Baseline</button>
+        <button type="button" class="btn btn-danger" onclick="handleProtectedReset()">Reset to Verified Baseline (14/15/16 Nov Fixed)</button>
       </div>
     </div>
   `;
@@ -2470,7 +2627,6 @@ function findMatchingContributor({ cleanEm, cleanPhone, rawName, code }) {
       const emObj = (u.emails || []).find(e => normEmail(e.email) === cleanEm);
       if (emObj) return { user: u, emObj, matchedBy: 'email' };
     }
-    // Canonical Gmail match ONLY for REACH emails (never cross-match G3V2LQ with REACH!)
     if (!g3) {
       const canon = canonicalGmail(cleanEm);
       for (const u of state.users) {
@@ -2496,7 +2652,6 @@ function buildAssignedEmailLookup() {
   const canonMap = {};
   state.users.forEach(u => {
     (u.emails || []).forEach(em => {
-      // STRICT RULE: G3V2LQ emails NEVER match REACH platform CSV sheets
       if (isG3Code(em.code)) return;
       const k = normEmail(em.email);
       const ck = canonicalGmail(em.email);
@@ -2692,7 +2847,6 @@ function handleBulkRosterUpload(ev) {
     const meta = findHeaderRowAndCols(aoa);
     if (!meta || meta.idxEmail === -1) { alert('Could not find an "Email" column in your sheet.'); return; }
 
-    // Save automatic checkpoint BEFORE applying bulk roster upload
     saveCleanCheckpoint(null, `Before Roster Upload (${file.name})`);
 
     const unmatchedByEmail = {};
@@ -2741,20 +2895,17 @@ function handleBulkRosterUpload(ev) {
 
       if (match) {
         const parentUser = match.user;
-        // NEVER overwrite or change parentUser.leader! Keep their assigned Team Leader intact!
         existingByLeaderCounts[parentUser.leader] = (existingByLeaderCounts[parentUser.leader] || 0) + 1;
 
         if (!parentUser.phone && cleanPhone.length >= 8) parentUser.phone = cleanPhone;
 
         if (match.emObj) {
           alreadyExistedUsers++;
-          // If G3V2LQ and manual hours provided in sheet, update manual total only
           if (g3 && hasTot && manTot > 0) {
             match.emObj.totalHours = round2(manTot);
             match.emObj.approvedHours = round2(manTot);
           }
         } else {
-          // Same name or same phone user has a 2nd email -> attach under same user card under their existing Team Leader!
           attachedSecondaryEmails++;
           const initTot = g3 ? round2(manTot) : (unItem ? round2(unItem.totalHours) : 0);
           parentUser.emails.push({
@@ -2775,13 +2926,12 @@ function handleBulkRosterUpload(ev) {
         }
         matchedEmailsToRemove.add(cleanEm);
       } else {
-        // Brand-new collector not existing anywhere -> add to targetLeader!
         newlyCreatedUsers++;
         const initTot = g3 ? round2(manTot) : (unItem ? round2(unItem.totalHours) : 0);
         state.users.unshift({
           id: 'usr_' + Date.now() + '_' + i + '_' + Math.floor(Math.random() * 10000),
           leader: targetLeader,
-          fullName: rawName || (unItem && unItem.username) || cleanEm.split('@')[0],
+          fullName: (rawName && rawName.toLowerCase() !== 'nan') ? rawName : ((unItem && unItem.username) || cleanEm.split('@')[0]),
           phone: cleanPhone,
           pickedUpCall: null,
           isWorking: null,
@@ -2811,6 +2961,7 @@ function handleBulkRosterUpload(ev) {
       !isEmailAlreadyAssigned(x.email, freshLookup)
     );
     state.lastSyncTime = `Roster Checked: ${file.name}`;
+    saveCleanCheckpoint(null, `After Roster Upload (${file.name})`);
     saveState(false);
     updateTopbarSubtitle();
     renderTabs();
@@ -2849,7 +3000,7 @@ function handleCsvFileUpload(ev) {
     const meta = findHeaderRowAndCols(aoa);
     if (!meta || meta.idxEmail === -1) { alert('Could not find valid Email / Hours columns in this file.'); return; }
 
-    // Save clean checkpoint BEFORE modifying date ledger
+    // Save permanent version checkpoint BEFORE modifying date ledger
     saveCleanCheckpoint(null, `Before Upload: ${file.name} (${targetDate})`);
 
     const rows = [];
@@ -2878,7 +3029,6 @@ function handleCsvFileUpload(ev) {
 
     if (rows.length === 0) { alert('No valid email rows found.'); return; }
 
-    // Lookup ONLY REACH accounts (G3V2LQ accounts are strictly excluded from REACH CSV matching)
     const assignedLookup = buildAssignedEmailLookup();
     state.dailyLedger = state.dailyLedger || {};
     state.cumulativeSnapshots = state.cumulativeSnapshots || {};
@@ -2891,7 +3041,6 @@ function handleCsvFileUpload(ev) {
     state.leaders.forEach(l => { byLeader[l] = 0; });
 
     if (uploadType === 'single_day') {
-      // Replace ONLY targetDate's entries with this single-day sheet's exact hours
       const newDayMap = {};
       rows.forEach(r => {
         const k = normEmail(r.email);
@@ -2911,7 +3060,6 @@ function handleCsvFileUpload(ev) {
           totalSheetHours += r.totalHours;
           hits.forEach(h => {
             byLeader[h.user.leader] = (byLeader[h.user.leader] || 0) + 1;
-            // Ensure All-Time Total is at least the sum of all logged days in dailyLedger
             let sumLoggedDays = 0;
             Object.keys(state.dailyLedger).forEach(dk => {
               if (dk === targetDate) return;
@@ -2930,7 +3078,6 @@ function handleCsvFileUpload(ev) {
       });
       state.dailyLedger[targetDate] = newDayMap;
     } else {
-      // All-Time Cumulative Export: update All-Time Totals & compute incremental delta vs previous cumulative snapshot
       if (!state.dailyLedger[targetDate]) state.dailyLedger[targetDate] = {};
       rows.forEach(r => {
         const k = normEmail(r.email);
@@ -2971,7 +3118,6 @@ function handleCsvFileUpload(ev) {
       });
     }
 
-    // Merge unmatched REACH emails (never adding any already-assigned REACH or G3V2LQ email)
     const freshLookup = buildAssignedEmailLookup();
     const mergedUn = {};
     (state.unmatched || []).forEach(x => {
@@ -2985,6 +3131,8 @@ function handleCsvFileUpload(ev) {
 
     state.lastSyncTime = `${file.name} [${targetDate} • ${uploadType === 'single_day' ? '24h Day Sheet' : 'All-Time Cumulative'}]`;
     recordAutoDailyJsonBackup(targetDate, file.name, uploadType, matchedCount, rows.length, `${targetDate} (${uploadType === 'single_day' ? 'Single-Day' : 'All-Time'})`);
+    // Also save an AFTER-upload checkpoint so you can always restore to this exact uploaded state even if another device syncs later!
+    saveCleanCheckpoint(null, `Uploaded: ${file.name} (${targetDate} • ${totalSheetHours.toFixed(2)}h)`);
     saveState(false);
     renderTabs();
     renderMain();
@@ -2994,14 +3142,14 @@ function handleCsvFileUpload(ev) {
     if (rep) {
       rep.innerHTML = `
         <div style="padding:13px 15px;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;font-size:13px;line-height:1.55;">
-          <strong>✅ Date-Wise Upload Saved to Vault [${escapeHtml(targetDate)} • ${uploadType === 'single_day' ? 'Single-Day Sheet' : 'All-Time Cumulative'}]:</strong><br/>
+          <strong>✅ Date-Wise Upload Saved to Vault & Version Checkpoints [${escapeHtml(targetDate)}]:</strong><br/>
           <span style="font-size:11.5px;color:#047857;">Auto-Detected Columns: ${escapeHtml(meta.detectedSummary)}</span><br/>
           • Matched <strong>${matchedCount}</strong> REACH accounts (<strong>${totalSheetHours.toFixed(2)}h</strong>) across teams (${breakdownStr}).<br/>
-          • All <strong>G3V2LQ</strong> accounts and existing Team Leaders stayed 100% untouched.
+          • Saved both <em>Before Upload</em> and <em>After Upload</em> restore checkpoints in Section 1.
         </div>
       `;
     }
-    showToast(`Saved ${targetDate} sheet (${matchedCount} REACH accounts matched)!`);
+    showToast(`Saved ${targetDate} sheet (${matchedCount} REACH accounts, ${totalSheetHours.toFixed(2)}h)!`);
   });
 }
 
@@ -3095,7 +3243,6 @@ function assignEmailsListToLeader(emailList, leader) {
     if (!targetSet.has(cleanEm)) return;
     const match = findMatchingContributor({ cleanEm, cleanPhone: '', rawName: item.username, code: 'REACH' });
     if (match) {
-      // Never change existing user's Team Leader; if secondary email, attach it
       if (!match.emObj) {
         match.user.emails.push({
           id: 'em_' + Date.now() + '_' + Math.floor(Math.random() * 100000),
@@ -3429,14 +3576,15 @@ function simulateRollover() {
 }
 
 function handleProtectedReset() {
-  const typed = prompt('Type RESET to restore the verified baseline (All-Time + 14/15/16 Nov sheets + updated1.xlsx roster):');
+  const typed = prompt('Type RESET to restore the verified baseline (14 Nov, 15 Nov, 16 Nov locked to exact calendar dates; Today starts at 0.00h):');
   if (typed !== 'RESET') return;
+  saveCleanCheckpoint(null, 'Before Baseline Reset');
   buildBaselineState();
   saveState(false);
   updateTopbarSubtitle();
   renderTabs();
   renderMain();
-  showToast('Restored verified baseline!');
+  showToast('Restored verified baseline with fixed calendar dates!');
 }
 
 function exportBackupJson() {
@@ -3454,6 +3602,7 @@ function importBackupJson(ev) {
   reader.onload = function(e) {
     try {
       const parsed = JSON.parse(e.target.result);
+      saveCleanCheckpoint(null, `Before JSON Import (${file.name})`);
       if (!applyParsedPayload(parsed)) { alert('Invalid JSON backup.'); return; }
       saveState(false);
       updateTopbarSubtitle();
@@ -3472,12 +3621,13 @@ function downloadDailyVaultJson(dateKey) {
   const blob = new Blob([JSON.stringify(entry.payloadJson, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `rsl_day_${dateKey}_backup.json`;
+  a.download = `rsl_day_${dateKey}}_backup.json`;
   a.click();
 }
 
 function removeDailyVault(dateKey) {
   if (!confirm(`Clear logged hours for ${dateKey}? Collectors and Team Leaders will NOT be removed.`)) return;
+  saveCleanCheckpoint(null, `Before Clearing Date (${dateKey})`);
   if (state.dailySheetVault) delete state.dailySheetVault[dateKey];
   if (state.dailyLedger) delete state.dailyLedger[dateKey];
   saveState(false);
